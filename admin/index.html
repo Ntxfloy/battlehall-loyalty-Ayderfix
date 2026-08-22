@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BATTLEHALL — админка</title>
+  <link rel="stylesheet" href="/static/brand/brand.css?v=6">
+  <link rel="stylesheet" href="/admin/styles.css?v=6">
+</head>
+<body>
+  <!-- экран входа -->
+  <section id="loginScreen" class="login-screen">
+    <form id="loginForm" class="login-card">
+      <img class="login-logo" src="/static/brand/logo-full.svg" alt="BATTLEHALL">
+      <div class="login-sub">Панель администратора</div>
+      <label>Логин<input id="loginUsername" type="text" autocomplete="username" required></label>
+      <label>Пароль<input id="loginPassword" type="password" autocomplete="current-password" required></label>
+      <div id="loginError" class="login-error" hidden></div>
+      <button class="btn primary block" type="submit">Войти</button>
+    </form>
+  </section>
+
+  <!-- панель -->
+  <div id="app" class="app" hidden>
+    <aside class="sidebar">
+      <img class="brand-logo" src="/static/brand/logo-full.svg" alt="BATTLEHALL">
+      <nav>
+        <button class="nav-item active" data-view="overview" data-perm="reports.view">Обзор</button>
+        <button class="nav-item" data-view="desk" data-perm="codes.view">Стойка</button>
+        <button class="nav-item" data-view="queue" data-perm="codes.approve">Подтверждение</button>
+        <button class="nav-item" data-view="users" data-perm="users.view">Пользователи</button>
+        <button class="nav-item" data-view="achievements" data-perm="catalog.edit">Достижения</button>
+        <button class="nav-item" data-view="rewards" data-perm="catalog.edit">Награды</button>
+        <button class="nav-item" data-view="loot" data-perm="catalog.edit">ЛУДЛЕНТА</button>
+        <button class="nav-item" data-view="clubs" data-perm="clubs.edit">Клубы</button>
+        <button class="nav-item" data-view="reports" data-perm="reports.view">Отчёты</button>
+        <button class="nav-item" data-view="admins" data-perm="admins.manage">Администраторы</button>
+        <button class="nav-item" data-view="oasys" data-perm="oasys.view">Живая карта</button>
+        <button class="nav-item" data-view="test" data-perm="test.tools">Тестовые запросы</button>
+        <button class="nav-item" data-view="logs" data-perm="logs.view">Журнал действий</button>
+      </nav>
+      <div class="sidebar-footer">
+        <div id="whoami" class="whoami"></div>
+        <button id="logoutBtn" class="btn ghost block">Выйти</button>
+      </div>
+    </aside>
+
+    <main class="content">
+      <!-- ОБЗОР -->
+      <section class="view" data-view="overview">
+        <h1>Обзор по сети</h1>
+        <div class="grid-stats" id="overviewStats"></div>
+        <div class="panel">
+          <h2>Клубы</h2>
+          <div id="overviewClubs" class="table-wrap"></div>
+        </div>
+      </section>
+
+      <!-- ПОЛЬЗОВАТЕЛИ -->
+      <section class="view" data-view="users" hidden>
+        <h1>Пользователи</h1>
+        <div class="toolbar">
+          <input id="userSearch" type="text" placeholder="Поиск: имя, ник, телефон, telegram_id">
+          <button class="btn" id="userSearchBtn">Найти</button>
+        </div>
+        <div id="usersTable" class="table-wrap"></div>
+        <div id="usersPager" class="pager"></div>
+
+        <div id="userDetailBackdrop" class="drawer-backdrop" hidden></div>
+        <div id="userDetail" class="drawer" hidden>
+          <div class="drawer-head">
+            <h2 id="userDetailTitle"></h2>
+            <button class="btn ghost" id="userDetailClose">Закрыть</button>
+          </div>
+          <div id="userDetailBody" class="drawer-body"></div>
+        </div>
+      </section>
+
+      <!-- КОДЫ -->
+      <section class="view" data-view="codes" hidden>
+        <h1>Коды наград</h1>
+        <div class="panel">
+          <h2>Найти и погасить код</h2>
+          <div class="toolbar">
+            <input id="codeInput" type="text" placeholder="Код, например BQ52TTWG" style="text-transform:uppercase">
+            <button class="btn" id="codeLookupBtn">Найти</button>
+            <button class="btn primary" id="codeUseBtn" disabled>Погасить</button>
+          </div>
+          <div id="codeResult"></div>
+        </div>
+        <div class="panel">
+          <h2>Использованные коды, не выгруженные в таблицу</h2>
+          <div id="codesTable" class="table-wrap"></div>
+        </div>
+      </section>
+
+      <!-- КЛУБЫ -->
+      <section class="view" data-view="clubs" hidden>
+        <h1>Клубы сети</h1>
+        <div class="panel">
+          <h2>Добавить клуб</h2>
+          <form id="clubCreateForm" class="inline-form">
+            <input id="clubSlug" placeholder="slug, напр. main" pattern="[a-z0-9_-]+" required>
+            <input id="clubName" placeholder="Название клуба" required>
+            <button class="btn primary" type="submit">Создать</button>
+          </form>
+        </div>
+        <div id="clubsTable" class="table-wrap"></div>
+      </section>
+
+      <!-- ОТЧЁТЫ -->
+      <section class="view" data-view="reports" hidden>
+        <h1>Отчётность по клубам</h1>
+        <p class="muted small">PTS и награды — общий кошелёк на всю сеть, здесь только то, что привязано к визиту: сессии, часы, зоны.</p>
+        <div class="toolbar">
+          <label>С <input id="reportFrom" type="date"></label>
+          <label>По <input id="reportTo" type="date"></label>
+          <button class="btn" id="reportRunBtn">Построить</button>
+        </div>
+        <div class="grid-stats" id="reportTotals"></div>
+        <div id="reportsTable" class="table-wrap"></div>
+      </section>
+
+      <!-- ЖИВАЯ КАРТА -->
+      <section class="view" data-view="oasys" hidden>
+        <h1>Живая карта зала</h1>
+        <p class="muted small">Тянется напрямую из внутреннего API OASys (тот же, которым пользуется официальный
+          клиент админа зала), в обход вебхуков — для внутренней демки. Без OASYS_JWT/OASYS_PC_JWT в .env раздел
+          покажет ошибку настройки вместо данных.</p>
+        <div class="toolbar">
+          <button class="btn" id="oasysRefreshBtn">Обновить</button>
+        </div>
+        <div class="grid-stats" id="oasysStats"></div>
+        <div id="oasysError"></div>
+        <div class="panel">
+          <h2>ПК в зале</h2>
+          <div id="oasysMapTable" class="table-wrap"></div>
+        </div>
+        <div class="panel">
+          <h2>Скидки и промокоды клуба</h2>
+          <div id="oasysDiscountsTable" class="table-wrap"></div>
+        </div>
+      </section>
+
+      <!-- ТЕСТОВЫЕ ЗАПРОСЫ -->
+      <section class="view" data-view="test" hidden>
+        <h1>Тестовые запросы</h1>
+        <p class="muted small">Симулирует вебхук OASys напрямую, без реального клуба — удобно проверить движок достижений и начисление PTS.</p>
+
+        <div class="panel">
+          <h2>Начать сессию</h2>
+          <form id="testStartForm" class="inline-form">
+            <select id="testStartClub"></select>
+            <input id="testStartTelegramId" type="number" placeholder="telegram_id" required>
+            <input id="testStartPc" type="number" min="1" max="49" placeholder="№ ПК" required>
+            <button class="btn primary" type="submit">Отправить</button>
+          </form>
+          <div id="testStartResult" class="result-box"></div>
+        </div>
+
+        <div class="panel">
+          <h2>Завершить сессию</h2>
+          <form id="testEndForm" class="inline-form">
+            <select id="testEndClub"></select>
+            <input id="testEndTelegramId" type="number" placeholder="telegram_id" required>
+            <input id="testEndSessionId" type="text" placeholder="session_id из ответа выше" required>
+            <input id="testEndMinutes" type="number" min="0" placeholder="минут (опц.)">
+            <button class="btn primary" type="submit">Отправить</button>
+          </form>
+          <div id="testEndResult" class="result-box"></div>
+        </div>
+      </section>
+
+      <!-- СТОЙКА -->
+      <section class="view" data-view="desk" hidden>
+        <h1>Стойка клуба</h1>
+        <div class="panel">
+          <h2>Найти гостя или код</h2>
+          <div class="toolbar">
+            <input id="deskSearch" type="text" placeholder="Код, ник, имя или телефон гостя">
+            <button class="btn primary" id="deskSearchBtn">Найти</button>
+          </div>
+          <div id="deskResults" class="table-wrap"></div>
+        </div>
+      </section>
+
+      <!-- ПОДТВЕРЖДЕНИЕ -->
+      <section class="view" data-view="queue" hidden>
+        <h1>Ждут подтверждения</h1>
+        <p class="muted small">Коды, внесённые на стойке. В таблицу компенсаций попадают только подтверждённые.</p>
+        <div id="queueTable" class="table-wrap"></div>
+
+        <div class="panel" style="margin-top:22px">
+          <h2>Google Sheets</h2>
+          <div id="sheetsStatus" class="small muted">Проверяем…</div>
+          <div class="toolbar" style="margin-top:12px;margin-bottom:0">
+            <button class="btn" id="sheetsCheckBtn">Проверить доступ</button>
+            <button class="btn primary" id="sheetsExportBtn">Выгрузить в таблицу</button>
+          </div>
+          <div id="sheetsResult" class="result-box"></div>
+        </div>
+      </section>
+
+      <!-- ДОСТИЖЕНИЯ -->
+      <section class="view" data-view="achievements" hidden>
+        <h1>Достижения</h1>
+        <p class="muted small">Тексты, цели и награды правятся здесь. Способ подсчёта задан в коде — у достижений без счётчика он помечен как внешний.</p>
+        <div id="achTable" class="table-wrap"></div>
+      </section>
+
+      <!-- НАГРАДЫ -->
+      <section class="view" data-view="rewards" hidden>
+        <h1>Награды</h1>
+        <div class="panel">
+          <h2>Добавить награду</h2>
+          <form id="rewardCreateForm" class="inline-form">
+            <input id="rwCode" placeholder="код, напр. cash_200" required>
+            <input id="rwTitle" placeholder="Название" required>
+            <input id="rwCost" type="number" min="0" placeholder="Цена в PTS" required>
+            <input id="rwValue" type="number" step="0.01" min="0" placeholder="Номинал" required>
+            <select id="rwUnit">
+              <option value="RUB">₽ на счёт</option>
+              <option value="MONTHS">мес. Premium</option>
+            </select>
+            <button class="btn primary" type="submit">Создать</button>
+          </form>
+        </div>
+        <div id="rewardsTable" class="table-wrap"></div>
+      </section>
+
+      <!-- ЛУДЛЕНТА -->
+      <section class="view" data-view="loot" hidden>
+        <h1>ЛУДЛЕНТА</h1>
+        <div class="panel">
+          <h2>Добавить ленту</h2>
+          <form id="wheelCreateForm" class="inline-form">
+            <input id="whCode" placeholder="код, напр. daily_loot" required>
+            <input id="whTitle" placeholder="Название" required>
+            <input id="whCost" type="number" min="1" placeholder="Цена прокрутки" required>
+            <button class="btn primary" type="submit">Создать</button>
+          </form>
+        </div>
+        <div id="wheelsList"></div>
+      </section>
+
+      <!-- АДМИНИСТРАТОРЫ -->
+      <section class="view" data-view="admins" hidden>
+        <h1>Администраторы</h1>
+        <div class="panel">
+          <h2>Новая учётка</h2>
+          <form id="adminCreateForm">
+            <div class="inline-form" style="margin-bottom:12px">
+              <input id="adUsername" placeholder="Логин" required>
+              <input id="adDisplay" placeholder="Имя">
+              <input id="adPassword" type="password" placeholder="Пароль (от 8 символов)" required>
+              <button class="btn primary" type="submit">Создать</button>
+            </div>
+            <div id="adPermissions" class="perm-grid"></div>
+          </form>
+        </div>
+        <div id="adminsTable" class="table-wrap"></div>
+      </section>
+
+      <!-- ЖУРНАЛ -->
+      <section class="view" data-view="logs" hidden>
+        <h1>Журнал действий</h1>
+        <div id="logsTable" class="table-wrap"></div>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="/admin/app.js?v=6"></script>
+  <script src="/admin/sections.js?v=6"></script>
+</body>
+</html>

@@ -1,0 +1,239 @@
+/* ============================================================
+   BATTLEHALL — фирменный слой.
+   Значения взяты из брендбука (разворот «Цвета. Основные»,
+   «Цвета. Градиент», «Шрифты») и сверены с battlehall.ru.
+   Правится здесь — применяется и в мини-аппе, и в админке.
+   ============================================================ */
+
+:root {
+  /* --- Основные цвета брендбука --- */
+  --bh-scarlet: #DB1F48;   /* Скарлет Крайола — основной акцент */
+  --bh-cyan:    #3ECFD1;   /* Голубой Крайола — второй акцент */
+  --bh-lime:    #FAFAFA;   /* Известь — текст по тёмному */
+  --bh-graphite:#1C1C1C;   /* Графит */
+  --bh-gold:    #F5AE08;   /* Косоно — предупреждения, «скоро» */
+
+  /* Точки фирменного градиента */
+  --bh-grad-1: #DB1F48;
+  --bh-grad-2: #416AAB;
+  --bh-grad-3: #3ECFD1;
+  --bh-gradient: linear-gradient(90deg, var(--bh-grad-1), var(--bh-grad-2), var(--bh-grad-3));
+
+  /* --- Поверхности. Оттенки с сайта: не чистый чёрный, а с синевой --- */
+  --bg:        #07070A;
+  --surface:   #13131B;
+  --surface-2: #1C1C28;
+  --border:    #262633;
+  --text:      var(--bh-lime);
+  --muted:     #8C8C91;
+
+  /* Семантика */
+  --accent:      var(--bh-scarlet);
+  --accent-soft: rgba(219, 31, 72, 0.14);
+  --success:     var(--bh-cyan);
+  --success-soft:rgba(62, 207, 209, 0.14);
+  --warning:     var(--bh-gold);
+  --warning-soft:rgba(245, 174, 8, 0.14);
+  --danger:      #FF4D6D;
+
+  /* Скруглений в бренде почти нет — форма угловатая, «пластина» */
+  --radius: 4px;
+  --clip: 10px;   /* срез угла у карточек */
+
+  /* Фирменный паттерн: наклонные соты из знака. Бесшовный, задаётся
+     один раз здесь — используется и в мини-аппе, и в админке. */
+  --bh-pattern: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20width%3D%2735%27%20height%3D%2760%27%20viewBox%3D%270%200%2035%2060%27%3E%3Cg%20fill%3D%27none%27%20stroke%3D%27%23ffffff%27%20stroke-opacity%3D%270.05%27%20stroke-width%3D%271.5%27%3E%3Cpath%20d%3D%27M11.7%2C-20.0%2032.1%2C-10.0%2037.9%2C10.0%2023.3%2C20.0%202.9%2C10.0%20-2.9%2C-10.0Z%27%2F%3E%3Cpath%20d%3D%27M2.9%2C10.0%2023.3%2C20.0%2029.2%2C40.0%2014.6%2C50.0%20-5.8%2C40.0%20-11.7%2C20.0Z%27%2F%3E%3Cpath%20d%3D%27M37.9%2C10.0%2058.3%2C20.0%2064.2%2C40.0%2049.6%2C50.0%2029.2%2C40.0%2023.3%2C20.0Z%27%2F%3E%3Cpath%20d%3D%27M29.2%2C40.0%2049.6%2C50.0%2055.4%2C70.0%2040.8%2C80.0%2020.4%2C70.0%2014.6%2C50.0Z%27%2F%3E%3Cpath%20d%3D%27M-14.6%2C-50.0%205.8%2C-40.0%2011.7%2C-20.0%20-2.9%2C-10.0%20-23.3%2C-20.0%20-29.2%2C-40.0Z%27%2F%3E%3Cpath%20d%3D%27M20.4%2C-50.0%2040.8%2C-40.0%2046.7%2C-20.0%2032.1%2C-10.0%2011.7%2C-20.0%205.8%2C-40.0Z%27%2F%3E%3Cpath%20d%3D%27M46.7%2C100.0%2067.1%2C110.0%2072.9%2C130.0%2058.3%2C140.0%2037.9%2C130.0%2032.1%2C110.0Z%27%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E");
+}
+
+/* --- Шрифты ---------------------------------------------------
+   Plateia и Gilroy — лицензионные, лежат на сайте клуба.
+   Положи .woff файлы в static/brand/fonts/ (см. README.md рядом),
+   и типографика станет фирменной. Без файлов всё работает на
+   системных шрифтах — просто без фирменного характера.
+   -------------------------------------------------------------- */
+
+@font-face {
+  font-family: "Plateia";
+  src: local("Plateia"), url("/static/brand/fonts/Plateia-Bold.woff") format("woff");
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Gilroy";
+  src: local("Gilroy Regular"), local("Gilroy-Regular"), url("/static/brand/fonts/Gilroy-Regular.woff") format("woff");
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Gilroy";
+  src: local("Gilroy Medium"), local("Gilroy-Medium"), url("/static/brand/fonts/Gilroy-Medium.woff") format("woff");
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Gilroy";
+  src: local("Gilroy SemiBold"), local("Gilroy-SemiBold"), url("/static/brand/fonts/Gilroy-SemiBold.woff") format("woff");
+  font-weight: 600;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Gilroy";
+  src: local("Gilroy Bold"), local("Gilroy-Bold"), url("/static/brand/fonts/Gilroy-Bold.woff") format("woff");
+  font-weight: 700;
+  font-display: swap;
+}
+
+:root {
+  /* Заголовки — Plateia, широкая техногенная антиква из брендбука */
+  --font-display: "Plateia", "ZonaPro", "Gilroy", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  /* Текст — Gilroy */
+  --font-body: "Gilroy", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+/* --- Фирменные примитивы -------------------------------------- */
+
+/* Плашка-ярлык раздела: как «ЦВЕТА ОСНОВНЫЕ» в брендбуке —
+   скарлет, срезанные по диагонали углы, курсивный капс. */
+.bh-tag {
+  display: inline-block;
+  background: var(--accent);
+  color: #fff;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 5px 16px 5px 12px;
+  clip-path: polygon(6px 0, 100% 0, calc(100% - 6px) 100%, 0 100%);
+}
+
+.bh-tag.cyan { background: var(--bh-cyan); color: #06202B; }
+.bh-tag.gold { background: var(--bh-gold); color: #2A1D00; }
+
+/* Угловатая пластина — базовая форма бренда. Срез правого нижнего
+   угла повторяет геометрию знака и паттерна. */
+.bh-plate {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  clip-path: polygon(
+    0 0,
+    100% 0,
+    100% calc(100% - var(--clip)),
+    calc(100% - var(--clip)) 100%,
+    0 100%
+  );
+}
+
+/* Заголовок в фирменной подаче */
+.bh-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-style: italic;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.bh-pattern { background-image: var(--bh-pattern); }
+
+/* Полоса прогресса в фирменном градиенте */
+.bh-progress {
+  height: 6px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.bh-progress > i {
+  display: block;
+  height: 100%;
+  background: var(--bh-gradient);
+  background-size: 300% 100%;
+  transition: width 0.35s ease;
+}
+
+/* ============================================================
+   Движение. Общие тайминги и кривые — чтобы hover, нажатия,
+   переключение вкладок и всплывающие элементы двигались в одном
+   темпе везде: и в мини-аппе, и в админке.
+   ============================================================ */
+
+:root {
+  /* expo-out: быстрый старт, мягкое торможение — стандарт для
+     появления элементов на современных интерфейсах */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  /* лёгкий перехлёст — для нажатия кнопки, «живой» отклик */
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  --dur-fast: 120ms;
+  --dur: 220ms;
+  --dur-slow: 360ms;
+}
+
+/* Базовый переход для любого интерактивного элемента — задаём один раз,
+   конкретные свойства (transform, background-color…) добавляют local-правила
+   через отдельные transition, не переопределяя это. */
+button, a, input, select, .item, .card, .stat, .stat-tile, .panel,
+.bh-plate, tr.clickable {
+  transition:
+    background-color var(--dur) var(--ease-out),
+    border-color var(--dur) var(--ease-out),
+    color var(--dur) var(--ease-out),
+    box-shadow var(--dur) var(--ease-out),
+    opacity var(--dur) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+/* Нажатие — лёгкое сжатие с перехлёстом, единое для всех «кнопочных»
+   элементов интерфейса вне зависимости от тега. */
+.btn, .tab, .seg, .nav-item, .acc-head, tr.clickable {
+  transform: scale(1);
+  transition-timing-function: var(--ease-spring);
+}
+
+.btn:active, .tab:active, .seg:active, .nav-item:active, .acc-head:active {
+  transform: scale(0.96);
+  transition-duration: var(--dur-fast);
+}
+
+.btn:not(:disabled):hover { transform: translateY(-1px); }
+
+/* Клавиатурный фокус — свой видимый индикатор вместо браузерного дефолта,
+   но не убираем его вовсе (доступность). */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Появление экрана/вкладки: снизу и с затуханием. Срабатывает каждый раз,
+   когда элемент возвращается из display:none — этого достаточно, чтобы не
+   городить JS-анимации поверх обычного переключения вкладок. */
+@keyframes bh-fade-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes bh-fade-in-right {
+  from { opacity: 0; transform: translateX(18px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes bh-pop-in {
+  from { opacity: 0; transform: scale(0.94); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+/* Гости с prefers-reduced-motion получают тот же интерфейс без движения —
+   логика не завязана на анимации, поэтому это безопасно отключить целиком. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
