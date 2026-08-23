@@ -5,7 +5,10 @@ from pathlib import Path
 import pytest
 
 # Настройки читаются на импорте, поэтому окружение готовим до импорта приложения.
+# Без APP_ENV=test CI считает себя production: Secure-куки не едут по http://testserver,
+# а /api/console/test/* не монтируется (405). Локально это маскирует .env.
 _TMP = Path(tempfile.mkdtemp(prefix="battlehall-test-"))
+os.environ["APP_ENV"] = "test"
 os.environ["DATABASE_URL"] = f"sqlite:///{(_TMP / 'test.db').as_posix()}"
 os.environ["BOT_TOKEN"] = "test:token"
 os.environ["DEV_ALLOW_FAKE_AUTH"] = "false"
@@ -74,5 +77,3 @@ def settings_patch(monkeypatch):
             monkeypatch.setattr(s, key, value)
 
     return _patch
-
-
