@@ -5,25 +5,21 @@
 Telegram и тем более падать из-за неё. Поэтому событие пишется строкой в
 `notification_outbox` в той же транзакции, что и само действие: если
 транзакция откатится, гость не получит сообщение о том, чего не произошло.
-Бот разбирает очередь фоновым воркером.
+Бот разбирает очередь фоновым воркером (см. `bot/main.py`).
 
 Повторы защищены `dedup_key`: уникальный индекс не даст поставить два
 одинаковых уведомления, даже если регламентный прогон повторится.
 
-Жизненный цикл строки:
-
-    pending --(доставлено)--> sent
-           \\--(ошибка, попытки кончились)--> failed
-
-Воркер берёт строку, сдвигая `next_attempt_at` вперёд («аренда»): если процесс
-упадёт между взятием и отправкой, строка вернётся в очередь сама, без ручного
-вмешательства.
+Жизненный цикл строки: pending -> sent (доставлено) либо pending -> failed
+(попытки кончились). Воркер берёт строку, сдвигая `next_attempt_at` вперёд
+(«аренда»): если процесс упадёт между взятием и отправкой, строка вернётся
+в очередь сама, без ручного вмешательства.
 """
 
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -43,7 +39,7 @@ MAX_ATTEMPTS = 6
 BACKOFF_MINUTES = (1, 5, 15, 60, 180)
 # На сколько строка уходит «в работу» к воркеру.
 LEASE_SECONDS = 120
-# Telegram обрежет сообщение сам, но в базе тоже незачем хранить простыню.
+# Telegram обрежет сообщение сам, но и в базе хранить простыню незачем.
 TEXT_MAX_LEN = 3500
 
 
@@ -55,11 +51,11 @@ def enqueue(
     text: str,
     dedup_key: str | None = None,
 ) -> NotificationOutbox | None:
-    """Ставит уведомление в очередь. Возвращает None, если ставить некому
-    или такое уведомление уже стоит."""
+    """Ставит уведомление в очередь. None — если ставить некому или такое
+    уведомление уже стоит в очереди."""
     user = db.get(User, user_id)
     if user is None or not user.telegram_id:
-        logger.warning("Уведомление %s пропущено: у пользователя %s нет telegram_id", kind, user_id)
+        logger.warning("Уведомление %s пропущено: у гостя %s нет telegram_id", kind, user_id)
         return None
 
     now = datetime.now(timezone.utc)
@@ -76,7 +72,7 @@ def enqueue(
     )
 
     # Отправляем накопленные изменения до SAVEPOINT: откат неудачной вставки
-    # не должен трогать чужие изменения этой же транзакции.
+    # не должен трогать остальные изменения этой же транзакции.
     db.flush()
     try:
         with db.begin_nested():
@@ -89,8 +85,8 @@ def enqueue(
 
 
 def try_enqueue(db: Session, **kwargs) -> NotificationOutbox | None:
-    """Обёртка для бизнес-логики: уведомление — вещь второстепенная и не имеет
-    права уронить подтверждение кода или возврат PTS."""
+    """Обёртка для бизнес-логики: уведомление вторично и не имеет права
+    уронить подтверждение кода или возврат PTS."""
     try:
         return enqueue(db, **kwargs)
     except Exception:   # noqa: BLE001 — намеренно широкий: очередь не критична
@@ -160,8 +156,8 @@ def mark_failed(
     error: str,
     now: datetime | None = None,
 ) -> NotificationOutbox | None:
-    """Считает неудачную попытку и назначает следующую. Когда попытки кончились,
-    строка получает статус failed — чтобы очередь не крутила её вечно."""
+    """Считает неудачную попытку и назначает следующую. Когда попытки
+    кончились, строка получает статус failed — чтобы очередь не крутила её вечно."""
     if now is None:
         now = datetime.now(timezone.utc)
     row = db.get(NotificationOutbox, row_id)
@@ -188,18 +184,23 @@ def mark_failed(
 
 
 def stats(db: Session) -> dict:
-    """Короткая сводка для админки и диагностики на стенде."""
-    counts = {NotificationStatus.PENDING: 0, NotificationStatus.SENT: 0, NotificationStatus.FAILED: 0}
-    for status, total in db.execute(
-        select(NotificationOutbox.status, __import__("sqlalchemy").func.count(NotificationOutbox.id)).group_by(
+    """Короткая сводка для диагностики на стенде."""
+    counts = {
+        NotificationStatus.PENDING: 0,
+        NotificationStatus.SENT: 0,
+        NotificationStatus.FAILED: 0,
+    }
+    rows = db.execute(
+        select(NotificationOutbox.status, func.count(NotificationOutbox.id)).group_by(
             NotificationOutbox.status
         )
-    ):
+    ).all()
+    for status, total in rows:
         counts[status] = int(total or 0)
     return counts
 
 
-# --- Тексты сообщений -------------------------------------------------------
+# --- Тексты сообщений и ключи дедупликации ------------------------------
 # Держим в одном месте: так проще править тон и не разъезжаться по сервисам.
 
 
@@ -229,9 +230,6 @@ def pts_granted_text(amount: int, comment: str = "") -> str:
     if comment:
         text += f"\n{comment}"
     return text
-
-
-# Ключи дедупликации — рядом с текстами, чтобы не разъезжались по сервисам.
 
 
 def code_approved_key(code: str) -> str:

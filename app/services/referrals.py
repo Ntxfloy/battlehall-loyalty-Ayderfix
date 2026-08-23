@@ -11,8 +11,8 @@ from sqlalchemy import Integer, cast, func, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models import User
-from app.services import achievements, sessions
+from app.models import NotificationKind, User
+from app.services import achievements, notifications, sessions
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -97,6 +97,15 @@ def on_session_closed(db: Session, user: User) -> None:
             REFERRAL_ACHIEVEMENT,
         )
     db.flush()
+    # Ключ дедупликации — id приглашённого: один друг — одно сообщение,
+    # сколько бы раз ни пересчитывался его налёт.
+    notifications.try_enqueue(
+        db,
+        user_id=inviter.id,
+        kind=NotificationKind.REFERRAL_CREDITED,
+        text=notifications.referral_credited_text(settings.referral_min_minutes),
+        dedup_key=notifications.referral_key(user.id),
+    )
 
 
 def referral_link(code: str) -> str:
