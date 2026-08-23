@@ -52,7 +52,7 @@ def create(
         username=username,
         password_hash=hash_password(password),
         display_name=display_name or username,
-        role=AdminRole.STAFF,   # владелец в системе один, новые — всегда сотрудники
+        role=AdminRole.STAFF,
         permissions=raw_perms,
         club_id=club_id,
     )
@@ -71,8 +71,6 @@ def update(
 ) -> AdminUser:
     row = get(db, admin_id)
     if row.role == AdminRole.OWNER and (permissions is not None or is_active is False):
-        # Права владельца неизменяемы, и отключить его нельзя — иначе панель
-        # можно оставить вообще без администратора.
         raise AdminError("Учётку владельца нельзя ограничить или отключить")
 
     if display_name is not None:
@@ -92,7 +90,6 @@ def update(
     return row
 
 
-
 def set_password(db: Session, admin_id: int, password: str) -> AdminUser:
     if len(password) < MIN_PASSWORD_LENGTH:
         raise AdminError(f"Пароль короче {MIN_PASSWORD_LENGTH} символов")
@@ -104,12 +101,18 @@ def set_password(db: Session, admin_id: int, password: str) -> AdminUser:
 
 
 def delete(db: Session, admin_id: int) -> None:
+    """Мягкое удаление сохраняет автора в истории и не переиспользует ID.
+
+    Подписанная кука содержит admin_id, поэтому физическое удаление в SQLite
+    могло отдать старый ID новой учётке и оживить куку уволенного сотрудника.
+    """
     row = get(db, admin_id)
     if row.role == AdminRole.OWNER:
         raise AdminError("Учётку владельца нельзя удалить")
-    db.delete(row)
+    row.is_active = False
+    row.permissions = perms.dump([], target_is_owner=False)
+    db.add(row)
     db.flush()
-
 
 
 def payload(row: AdminUser) -> dict:

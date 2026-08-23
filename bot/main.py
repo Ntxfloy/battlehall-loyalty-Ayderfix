@@ -22,6 +22,7 @@ from aiogram.types import (
     ReplyKeyboardRemove,
     WebAppInfo,
 )
+from sqlalchemy.exc import IntegrityError
 
 from app.config import get_settings
 from app.db import SessionLocal, init_db
@@ -33,6 +34,10 @@ logger = logging.getLogger(__name__)
 
 settings = get_settings()
 dp = Dispatcher()
+
+
+class BotUserError(Exception):
+    pass
 
 
 def _open_app_keyboard() -> InlineKeyboardMarkup:
@@ -53,16 +58,49 @@ def _phone_keyboard() -> ReplyKeyboardMarkup:
 
 def _get_or_create(db, telegram_id: int, message: Message) -> User:
     user = db.query(User).filter(User.telegram_id == telegram_id).one_or_none()
-    if user is None:
-        user = User(
-            telegram_id=telegram_id,
-            username=message.from_user.username,
-            first_name=message.from_user.first_name,
-            referral_code=referrals.generate_code(db),
-        )
-        db.add(user)
+    if user is not None:
+        return user
+
+    user = User(
+        telegram_id=telegram_id,
+        username=message.from_user.username,
+        first_name=message.from_user.first_name,
+        referral_code=referrals.generate_code(db),
+    )
+    db.add(user)
+    try:
         db.flush()
+    except IntegrityError:
+        db.rollback()
+        user = db.query(User).filter(User.telegram_id == telegram_id).one_or_none()
+        if user is None:
+            raise
     return user
+
+
+def _save_phone(db, user: User, raw_phone: str) -> str:
+    phone = sessions.normalize_phone(raw_phone)
+    if not phone:
+        raise BotUserError("Не удалось распознать номер. Отправь контакт кнопкой ниже ещё раз.")
+
+    owner = db.query(User).filter(User.phone == phone, User.id != user.id).one_or_none()
+    if owner is not None:
+        raise BotUserError(
+            "Этот номер уже привязан к другому Telegram-аккаунту. "
+            "Обратись к администратору клуба."
+        )
+
+    user.phone = phone
+    db.add(user)
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        db.rollback()
+        raise BotUserError(
+            "Этот номер уже привязан к другому Telegram-аккаунту. "
+            "Обратись к администратору клуба."
+        ) from exc
+    return phone
 
 
 @dp.message(CommandStart(deep_link=True))
@@ -116,12 +154,14 @@ async def save_contact(message: Message) -> None:
         await message.answer("Отправь, пожалуйста, свой номер, а не чужой контакт.")
         return
 
-    phone = sessions.normalize_phone(message.contact.phone_number)
-    with SessionLocal() as db:
-        user = _get_or_create(db, message.from_user.id, message)
-        user.phone = phone
-        db.add(user)
-        db.commit()
+    try:
+        with SessionLocal() as db:
+            user = _get_or_create(db, message.from_user.id, message)
+            _save_phone(db, user, message.contact.phone_number)
+            db.commit()
+    except BotUserError as exc:
+        await message.answer(str(exc), reply_markup=_phone_keyboard())
+        return
 
     await message.answer("Номер сохранён.", reply_markup=ReplyKeyboardRemove())
     await message.answer("Готово, приложение ждёт.", reply_markup=_open_app_keyboard())
