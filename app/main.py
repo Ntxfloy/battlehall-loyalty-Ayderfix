@@ -68,6 +68,63 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- защитные заголовки ---
+#
+# Мини-апп и админка — статика с нашего же домена, единственный внешний скрипт —
+# telegram-web-app.js. SRI на него вешать нельзя: Telegram молча обновляет файл по тому
+# же URL, и зафиксированный хеш однажды положит приложение без предупреждения. Поэтому
+# ограничиваем источники через CSP: скрипты — только свои и telegram.org.
+#
+# style-src держит 'unsafe-inline' осознанно: в разметке и в JS есть атрибуты style="…"
+# (прогресс-бары, ширина полос, координаты монеток). Без nonce-сборки убрать его нельзя,
+# но скрипты это не ослабляет — XSS через <script> остаётся закрыт.
+#
+# frame-ancestors пускает только Telegram: мини-апп открывается внутри клиента,
+# поэтому глухой X-Frame-Options: DENY сломал бы веб-версию Telegram.
+CONTENT_SECURITY_POLICY = "; ".join(
+    [
+        "default-src 'self'",
+        "script-src 'self' https://telegram.org",
+        "style-src 'self' 'unsafe-inline'",
+        "img-src 'self' data: blob:",
+        "font-src 'self' data:",
+        "connect-src 'self' https://api.telegram.org",
+        "frame-ancestors 'self' https://telegram.org https://*.telegram.org https://*.t.me",
+        "form-action 'self'",
+        "base-uri 'self'",
+        "object-src 'none'",
+    ]
+)
+
+# API ничего не рендерит, ему можно самую жёсткую политику.
+API_CONTENT_SECURITY_POLICY = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+
+PERMISSIONS_POLICY = "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+HSTS_VALUE = "max-age=31536000; includeSubDomains"
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+
+    is_api = request.url.path.startswith("/api/")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        API_CONTENT_SECURITY_POLICY if is_api else CONTENT_SECURITY_POLICY,
+    )
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Permissions-Policy", PERMISSIONS_POLICY)
+    response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+
+    # HSTS только на боевом домене с HTTPS: на localhost он запомнится браузером
+    # на год и сломает обычную разработку по http.
+    if not is_local_env():
+        response.headers.setdefault("Strict-Transport-Security", HSTS_VALUE)
+
+    return response
+
+
 # Щит на время демо по публичной ссылке (туннель): пока задан
 # DEMO_GATE_PASSWORD, весь сайт — мини-апп и админка — закрыт общим
 # паролем поверх обычной авторизации. Кука хранит не сам пароль, а его
