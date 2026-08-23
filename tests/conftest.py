@@ -26,8 +26,18 @@ get_settings.cache_clear()
 
 from app.db import Base, SessionLocal, engine  # noqa: E402
 from app.models import Club, User  # noqa: E402
+from app.rate_limit import login_limiter  # noqa: E402
 from app.services import referrals  # noqa: E402
 from seed import seed_achievements, seed_default_admin, seed_default_club, seed_rewards  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def reset_login_limiter():
+    """Лимит попыток входа живёт в памяти процесса и иначе протекает
+    между тестами: один тест набивает неудачные попытки, а падает соседний."""
+    login_limiter.clear()
+    yield
+    login_limiter.clear()
 
 
 @pytest.fixture

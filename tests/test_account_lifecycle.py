@@ -23,9 +23,10 @@ def _user(db, telegram_id: int, phone: str | None = None) -> User:
 def test_admin_delete_is_soft_and_revokes_cookie(client, db):
     staff = admins_service.create(db, "former", "password123")
     staff_id = staff.id
+    staff_hash = staff.password_hash
     db.commit()
 
-    client.cookies.set("bh_admin_session", create_session_value(staff_id))
+    client.cookies.set("bh_admin_session", create_session_value(staff_id, staff_hash))
     assert client.get("/api/console/auth/me").status_code == 200
 
     admins_service.delete(db, staff_id)

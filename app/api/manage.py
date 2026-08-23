@@ -5,12 +5,18 @@
 тексты, цели, награды и веса, но не способ, которым считается прогресс.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app import permissions as perms
-from app.admin_auth import current_admin_user, require_permission, verify_password
-from app.config import get_settings
+from app.admin_auth import (
+    SESSION_COOKIE,
+    create_session_value,
+    current_admin_user,
+    require_permission,
+    verify_password,
+)
+from app.config import get_settings, is_local_env
 from app.db import get_db
 from app.models import AdminUser, TxReason, User
 from app.schemas import (
@@ -106,9 +112,15 @@ def update_admin(
 def set_admin_password(
     admin_id: int,
     body: AdminPasswordRequest,
+    response: Response,
     admin: AdminUser = Depends(require_permission(perms.ADMINS_MANAGE)),
     db: Session = Depends(get_db),
 ) -> dict:
+    """Сброс пароля выбивает владельца учётки из всех его сессий: кука
+    привязана к отпечатку пароля (app/admin_auth.py). Если владелец меняет
+    пароль самому себе из списка учёток — сразу перевыпускаем его куку,
+    чтобы панель не выкинула его на экран входа без объяснений.
+    """
     try:
         row = admins_service.set_password(db, admin_id, body.password)
     except admins_service.AdminError as exc:
@@ -116,6 +128,9 @@ def set_admin_password(
 
     audit.log(db, admin.username, "admin_password_reset", target_type="admin", target_id=row.username)
     db.commit()
+
+    if row.id == admin.id:
+        _issue_session_cookie(response, row)
     return {"ok": True}
 
 
@@ -137,23 +152,44 @@ def delete_admin(
     return {"ok": True}
 
 
+def _issue_session_cookie(response: Response, admin: AdminUser) -> None:
+    """Новая кука под текущий пароль. Параметры обязаны совпадать с теми,
+    что ставит /api/console/auth/login, иначе браузер заведёт вторую куку."""
+    settings = get_settings()
+    response.set_cookie(
+        SESSION_COOKIE,
+        create_session_value(admin.id, admin.password_hash),
+        httponly=True,
+        samesite="lax",
+        secure=not is_local_env(),
+        max_age=settings.admin_session_ttl_hours * 3600,
+    )
+
+
 @router.post("/auth/password")
 def change_own_password(
     body: SelfPasswordRequest,
+    response: Response,
     admin: AdminUser = Depends(current_admin_user),
     db: Session = Depends(get_db),
 ) -> dict:
-    """Смену своего пароля не ограничиваем правами — она нужна каждому."""
+    """Смену своего пароля не ограничиваем правами — она нужна каждому.
+
+    Все остальные сессии этой учётки умирают сразу — ради этого смену пароля
+    обычно и делают. Текущему браузеру выдаём свежую куку.
+    """
     if not verify_password(body.current_password, admin.password_hash):
         raise HTTPException(status_code=400, detail="Текущий пароль неверен")
     try:
-        admins_service.set_password(db, admin.id, body.new_password)
+        row = admins_service.set_password(db, admin.id, body.new_password)
     except admins_service.AdminError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     audit.log(db, admin.username, "password_change_self")
     db.commit()
-    return {"ok": True}
+
+    _issue_session_cookie(response, row)
+    return {"ok": True, "sessions_revoked": True}
 
 
 # ============================================================

@@ -278,7 +278,8 @@ def test_staff_without_permissions_gets_403(client, db, user):
     db.add(staff)
     db.commit()
 
-    client.cookies.set("bh_admin_session", create_session_value(staff.id))
+    # Кука привязана к отпечатку пароля, иначе будет 401 вместо 403.
+    client.cookies.set("bh_admin_session", create_session_value(staff.id, staff.password_hash))
 
     # /api/admin/pts/grant должен вернуть 403
     resp_grant = client.post("/api/admin/pts/grant", json={"telegram_id": user.telegram_id, "amount": 100, "comment": "test"})

@@ -4,8 +4,8 @@
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import permissions as perms
@@ -22,6 +22,7 @@ from app.db import get_db
 from app.loyalty import group_for_hours
 from app.models import AdminUser, Club, User
 from app.periods import iso
+from app.rate_limit import login_key, login_limiter
 from app.schemas import (
     AdminLoginRequest,
     ClubCreateRequest,
@@ -39,13 +40,50 @@ settings = get_settings()
 # --- вход ---
 
 @router.post("/auth/login")
-def login(body: AdminLoginRequest, response: Response, db: Session = Depends(get_db)) -> dict:
+def login(
+    body: AdminLoginRequest,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Вход по логину и паролю.
+
+    Логин сравнивается без учёта регистра и краевых пробелов: учётки всегда
+    создаются в нижнем регистре (admins.create), а телефон и планшет охотно
+    подставляют заглавную первую букву — раньше это выглядело как «неверный пароль».
+
+    Неудачные попытки считаются по паре «адрес + логин», успешный вход сбрасывает
+    счётчик.
+    """
+    username = (body.username or "").strip().lower()
+    client_ip = request.client.host if request.client else None
+    key = login_key(client_ip, username)
+
+    retry_after = login_limiter.retry_after(key)
+    if retry_after:
+        raise HTTPException(
+            status_code=429,
+            detail="Слишком много попыток входа. Попробуйте позже",
+            headers={"Retry-After": str(retry_after)},
+        )
+
     admin = db.execute(
-        select(AdminUser).where(AdminUser.username == body.username)
+        select(AdminUser).where(func.lower(AdminUser.username) == username)
     ).scalar_one_or_none()
 
     if admin is None or not admin.is_active or not verify_password(body.password, admin.password_hash):
+        remaining = login_limiter.register_failure(key)
+        # Пишем в журнал и неудачи: без этого перебор пароля нигде не виден.
+        audit.log(
+            db,
+            username[:64] or "-",
+            "login_failed",
+            detail={"ip": client_ip, "attempts_left": remaining},
+        )
+        db.commit()
         raise HTTPException(status_code=401, detail="Неверный логин или пароль")
+
+    login_limiter.reset(key)
 
     admin.last_login_at = datetime.now(timezone.utc)
     db.add(admin)
@@ -54,7 +92,7 @@ def login(body: AdminLoginRequest, response: Response, db: Session = Depends(get
 
     response.set_cookie(
         SESSION_COOKIE,
-        create_session_value(admin.id),
+        create_session_value(admin.id, admin.password_hash),
         httponly=True,
         samesite="lax",
         secure=not is_local_env(),
@@ -160,7 +198,7 @@ def list_users(
     _: AdminUser = Depends(require_permission(perms.USERS_VIEW)),
     db: Session = Depends(get_db),
 ) -> dict:
-    from sqlalchemy import func, or_
+    from sqlalchemy import or_
 
     filters = []
     if q:
