@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import html
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -11,7 +12,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api import admin, console, desk, manage, miniapp, webhooks
-from app.config import get_settings, is_placeholder_secret, is_production
+from app.config import get_settings, is_local_env, is_placeholder_secret, is_production
 from app.db import SessionLocal, init_db
 from app.services import clubs as clubs_service
 
@@ -22,6 +23,15 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 MINIAPP_DIR = BASE_DIR / "miniapp"
 ADMIN_UI_DIR = BASE_DIR / "admin"
 STATIC_DIR = BASE_DIR / "static"
+
+
+def safe_redirect(url: str | None) -> str:
+    """Только относительный путь того же сайта. Иначе после демо-гейта
+    параметр redirect уведёт на чужой домен."""
+    candidate = (url or "/").strip()
+    if not candidate.startswith("/") or candidate.startswith("//") or "\\" in candidate:
+        return "/"
+    return candidate
 
 
 @asynccontextmanager
@@ -41,7 +51,6 @@ async def lifespan(_: FastAPI):
     yield
 
 
-
 app = FastAPI(
     title="BATTLEHALL Loyalty",
     description="Программа лояльности клуба: Telegram Mini App поверх OASys",
@@ -50,10 +59,11 @@ app = FastAPI(
 )
 
 # Mini App грузится с этого же домена, поэтому CORS нужен только для локальной
-# отладки фронта на отдельном порту.
+# отладки фронта на отдельном порту. APP_ENV=local/test тоже локальная среда.
+_cors_origins = ["*"] if is_local_env() else ([settings.miniapp_url] if settings.miniapp_url else [])
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"] if settings.app_env == "dev" else [settings.miniapp_url],
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -109,27 +119,33 @@ if settings.demo_gate_password:
             # даже для этого простого случая).
             body = (await request.body()).decode("utf-8", errors="ignore")
             form = dict(parse_qsl(body))
-            redirect_to = form.get("redirect") or "/"
+            redirect_to = safe_redirect(form.get("redirect"))
             if hmac.compare_digest(form.get("password", ""), settings.demo_gate_password):
                 response = RedirectResponse(url=redirect_to, status_code=303)
                 response.set_cookie(
                     DEMO_GATE_COOKIE, expected,
                     max_age=60 * 60 * 24 * 30, httponly=True, samesite="lax",
+                    secure=not is_local_env(),
                 )
                 return response
             page = _DEMO_LOGIN_PAGE.format(
-                redirect=redirect_to, error_html='<div class="error">Неверный пароль</div>',
+                redirect=html.escape(redirect_to, quote=True),
+                error_html='<div class="error">Неверный пароль</div>',
             )
             return HTMLResponse(page, status_code=401)
 
         redirect_to = request.url.path
         if request.url.query:
             redirect_to += f"?{request.url.query}"
-        page = _DEMO_LOGIN_PAGE.format(redirect=redirect_to, error_html="")
+        redirect_to = safe_redirect(redirect_to)
+        page = _DEMO_LOGIN_PAGE.format(
+            redirect=html.escape(redirect_to, quote=True),
+            error_html="",
+        )
         return HTMLResponse(page, status_code=401)
 
 
-if settings.app_env == "dev":
+if is_local_env():
     # В разработке правки css/js должны быть видны после обычного F5.
     # Одного ETag мало: браузер кэширует статику эвристически и продолжает
     # показывать старый файл, из-за чего чинишь несуществующие баги.
@@ -141,8 +157,6 @@ if settings.app_env == "dev":
         return response
 
 
-from app.config import get_settings, is_production
-
 app.include_router(miniapp.router)
 app.include_router(webhooks.router)
 app.include_router(admin.router)
@@ -153,10 +167,9 @@ app.include_router(desk.router)
 app.include_router(manage.router)
 
 
-
 @app.get("/health", tags=["service"])
 def health() -> dict:
-    return {"status": "ok", "env": settings.app_env}
+    return {"status": "ok"}
 
 
 @app.get("/admin", include_in_schema=False)

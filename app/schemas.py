@@ -5,12 +5,13 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+MAX_SESSION_MINUTES = 24 * 60
+
 
 class GrantPtsRequest(BaseModel):
     telegram_id: int
     amount: int = Field(..., ge=1, le=1_000_000)
     comment: str = Field(default="Ручное начисление", min_length=1, max_length=200)
-
 
 
 class ManualPtsRequest(BaseModel):
@@ -41,14 +42,14 @@ class SessionStartPayload(BaseModel):
     phone: str | None = None
 
     ended_at: datetime | None = None
-    duration_minutes: int | None = None
+    duration_minutes: int | None = Field(default=None, ge=0, le=MAX_SESSION_MINUTES)
 
 
 class SessionEndPayload(SessionStartPayload):
     """Событие «гость закончил». started_at нужен на случай, если старт потеряли."""
 
     ended_at: datetime | None = None
-    duration_minutes: int | None = Field(default=None, ge=0)
+    duration_minutes: int | None = Field(default=None, ge=0, le=MAX_SESSION_MINUTES)
 
 
 class LinkPhonePayload(BaseModel):
@@ -75,12 +76,11 @@ class UseCodeRequest(BaseModel):
     code: str
 
 
-
 # --- Панель администратора ---
 
 class AdminLoginRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(..., min_length=1, max_length=64)
+    password: str = Field(..., min_length=1, max_length=128)
 
 
 class ClubCreateRequest(BaseModel):
@@ -110,7 +110,7 @@ class TestSessionEndRequest(BaseModel):
     session_id: str
     pc_number: int | None = None
     started_at: datetime | None = None
-    duration_minutes: int | None = Field(default=None, ge=0)
+    duration_minutes: int | None = Field(default=None, ge=0, le=MAX_SESSION_MINUTES)
 
 
 # --- Учётки администраторов ---
@@ -135,7 +135,7 @@ class AdminPasswordRequest(BaseModel):
 
 
 class SelfPasswordRequest(BaseModel):
-    current_password: str
+    current_password: str = Field(..., min_length=1, max_length=128)
     new_password: str = Field(..., min_length=8, max_length=128)
 
 
