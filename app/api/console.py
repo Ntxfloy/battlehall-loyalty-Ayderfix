@@ -20,7 +20,7 @@ from app.admin_auth import (
 from app.config import get_settings, is_local_env
 from app.db import get_db
 from app.loyalty import group_for_hours
-from app.models import AdminUser, Club, GameSession, PtsTransaction, RewardRedemption, User
+from app.models import AdminUser, Club, User
 from app.periods import iso
 from app.schemas import (
     AdminLoginRequest,
@@ -63,7 +63,6 @@ def login(body: AdminLoginRequest, response: Response, db: Session = Depends(get
     return {"ok": True, "username": admin.username, "display_name": admin.display_name}
 
 
-
 @router.post("/auth/logout")
 def logout(response: Response, admin: AdminUser = Depends(current_admin_user), db: Session = Depends(get_db)) -> dict:
     audit.log(db, admin.username, "logout")
@@ -76,8 +75,6 @@ def logout(response: Response, admin: AdminUser = Depends(current_admin_user), d
 def me(admin: AdminUser = Depends(current_admin_user)) -> dict:
     """Отдаём и права: панель по ним прячет разделы. Это только удобство —
     доступ всё равно проверяется на каждой ручке отдельно."""
-    from app import permissions as perms
-
     return {
         "username": admin.username,
         "display_name": admin.display_name,
@@ -89,7 +86,7 @@ def me(admin: AdminUser = Depends(current_admin_user)) -> dict:
 # --- клубы ---
 
 @router.get("/clubs")
-def list_clubs(_: AdminUser = Depends(require_permission(perms.CLUBS_EDIT)), db: Session = Depends(get_db)) -> dict:
+def list_clubs(_: AdminUser = Depends(require_permission(perms.CLUBS_VIEW)), db: Session = Depends(get_db)) -> dict:
     from app.config import is_placeholder_secret
 
     return {
@@ -104,8 +101,6 @@ def list_clubs(_: AdminUser = Depends(require_permission(perms.CLUBS_EDIT)), db:
             for c in clubs_service.list_clubs(db)
         ]
     }
-
-
 
 
 @router.post("/clubs")
@@ -317,8 +312,6 @@ def oasys_discounts(_: AdminUser = Depends(require_permission(perms.OASYS_VIEW))
 
 # --- журнал действий ---
 
-# --- журнал действий ---
-
 @router.get("/logs")
 def logs(
     page: int = Query(default=1, ge=1),
@@ -437,5 +430,3 @@ def test_session_end(
               detail={"club": club.slug, "minutes": row.duration_minutes})
     db.commit()
     return {"ok": True, "session_id": row.oasys_session_id, "closed": closed, "minutes": row.duration_minutes}
-
-

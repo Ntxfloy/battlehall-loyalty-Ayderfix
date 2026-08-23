@@ -16,7 +16,7 @@ from sqlalchemy import select
 
 from app.achievements_defs import ACHIEVEMENTS, DAILY_CHECKIN_CODE
 from app.admin_auth import hash_password
-from app.config import get_settings, is_placeholder_secret
+from app.config import get_settings, is_placeholder_secret, is_production
 from app.db import SessionLocal, init_db
 from app.models import (
     AchievementDef,
@@ -30,8 +30,20 @@ from app.models import (
     Wheel,
     WheelPrize,
 )
+from app.services.admins import MIN_PASSWORD_LENGTH
 
 settings = get_settings()
+
+_WEAK_DEFAULT_PASSWORDS = frozenset({
+    "",
+    "change-me",
+    "change-me-now",
+    "changeme",
+    "change-me-now-12345",
+    "password",
+    "admin",
+    "12345678",
+})
 
 REWARDS = (
     {
@@ -191,12 +203,25 @@ def ensure_owner(db) -> AdminUser | None:
     return first
 
 
+def _admin_password_is_unsafe(password: str) -> bool:
+    candidate = (password or "").strip()
+    return len(candidate) < MIN_PASSWORD_LENGTH or candidate.lower() in _WEAK_DEFAULT_PASSWORDS
+
+
 def seed_default_admin(db) -> AdminUser | None:
     """Создаёт первую учётку администратора из ADMIN_DEFAULT_USERNAME/PASSWORD —
     только если в базе ещё нет ни одного админа. Дальше учётки заводятся
     из панели, в разделе «Администраторы»."""
     exists = db.execute(select(AdminUser.id)).first()
     if exists:
+        return None
+    if _admin_password_is_unsafe(settings.admin_default_password):
+        message = (
+            "В production нельзя создать владельца с пустым или слабым "
+            "ADMIN_DEFAULT_PASSWORD"
+        )
+        if is_production():
+            raise RuntimeError(message)
         return None
     admin = AdminUser(
         username=settings.admin_default_username,
