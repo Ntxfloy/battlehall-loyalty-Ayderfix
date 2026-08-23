@@ -4,6 +4,7 @@
 друг реально отыграл минимум (по умолчанию час) — иначе ссылку легко накрутить.
 """
 
+import logging
 import secrets
 import string
 
@@ -14,6 +15,7 @@ from app.config import get_settings
 from app.models import User
 from app.services import achievements, sessions
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
 REFERRAL_ACHIEVEMENT = "special_referral"
@@ -70,7 +72,18 @@ def on_session_closed(db: Session, user: User) -> None:
 
     user.referral_credited = True
     db.add(user)
-    achievements.mark_completed(db, inviter, REFERRAL_ACHIEVEMENT)
+    try:
+        # Инкремент, а не mark_completed: иначе первый друг закрывает
+        # всю ачивку «приведи N друзей».
+        achievements.increment(db, inviter, REFERRAL_ACHIEVEMENT)
+    except achievements.AchievementError:
+        # Ачивку могли выключить или удалить из каталога — закрытие сессии
+        # не должно падать и ронять вебхук OASys в бесконечный ретрай.
+        logger.warning(
+            "Реферал засчитан пользователю %s, но ачивка %s недоступна",
+            inviter.id,
+            REFERRAL_ACHIEVEMENT,
+        )
     db.flush()
 
 
