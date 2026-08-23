@@ -19,11 +19,13 @@ class FakeWorksheet:
         self.fail = fail
         self.title = "Компенсации"
         self.row_count = 1000
+        self.options: list[str | None] = []
 
     def append_rows(self, rows, value_input_option=None):
         if self.fail:
             raise RuntimeError("Google недоступен")
         self.rows.extend(rows)
+        self.options.append(value_input_option)
 
 
 @pytest.fixture
@@ -50,7 +52,6 @@ def _approved_code(client, db, user) -> str:
     client.post("/api/console/desk/submit", json={"code": code})
     client.post("/api/console/desk/approve", json={"code": code})
     return code
-
 
 
 # --- конфигурация ---
@@ -92,6 +93,8 @@ def test_export_writes_row_and_marks_it(client, db, user, monkeypatch):
     assert len(fake.rows) == 1
     assert fake.rows[0][0] == code                     # код в первой колонке
     assert "300 ₽ на игровой счёт" in fake.rows[0]     # награда попала в строку
+    assert fake.options == [sheets.VALUE_INPUT_OPTION]
+    assert sheets.VALUE_INPUT_OPTION == "RAW"
 
 
 def test_exported_row_is_not_sent_twice(client, db, user, monkeypatch):
@@ -116,6 +119,20 @@ def test_failed_export_leaves_row_in_queue(client, db, user, monkeypatch):
         sheets.export_pending(db)
 
     assert len(sheets.pending_export(db)) == 1
+
+
+def test_second_worker_does_not_export_claimed_row(client, db, user, monkeypatch):
+    """Условный захват: второй вызов не пишет в таблицу уже забранную строку."""
+    _approved_code(client, db, user)
+    fake = FakeWorksheet()
+    monkeypatch.setattr(sheets, "_worksheet", lambda: fake)
+
+    first = sheets.export_pending(db)
+    second = sheets.export_pending(db)
+
+    assert first["exported"] == 1
+    assert second["exported"] == 0
+    assert len(fake.rows) == 1
 
 
 def test_only_approved_rows_are_exported(client, db, user, monkeypatch):
@@ -143,6 +160,7 @@ def test_autoexport_on_approve(client, db, user, monkeypatch):
 
     assert len(fake.rows) == 1
     assert fake.rows[0][0] == code
+    assert fake.options == [sheets.VALUE_INPUT_OPTION]
     assert sheets.pending_export(db) == []
 
 
@@ -184,4 +202,3 @@ def test_export_endpoint_requires_approve_permission(client, db):
     _login(client, "deskonly", "password123")
 
     assert client.post("/api/console/sheets/export").status_code == 403
-

@@ -7,12 +7,16 @@
 
 Интеграция необязательная: без настроек всё остальное работает как раньше,
 а выгрузка просто отдаёт JSON для ручного переноса.
+
+Очередь выгрузки — сами подтверждённые строки с пустым exported_at.
+Право записать строку в таблицу выигрывается условным UPDATE: второй воркер
+не отправит ту же компенсацию повторно.
 """
 
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -23,6 +27,9 @@ logger = logging.getLogger(__name__)
 
 # Права: только таблицы, ничего лишнего у сервисного аккаунта не просим.
 SCOPES = ("https://www.googleapis.com/auth/spreadsheets",)
+
+# RAW: иначе Google превратит «01.02» и коды в даты/числа.
+VALUE_INPUT_OPTION = "RAW"
 
 HEADER = (
     "Код",
@@ -82,7 +89,7 @@ def _worksheet():
         # Листа с таким названием нет — заводим его вместе с шапкой,
         # чтобы владельцу не пришлось готовить таблицу руками.
         worksheet = spreadsheet.add_worksheet(title=title, rows=1000, cols=len(HEADER))
-        worksheet.append_row(list(HEADER), value_input_option="USER_ENTERED")
+        worksheet.append_row(list(HEADER), value_input_option=VALUE_INPUT_OPTION)
         return worksheet
 
 
@@ -131,52 +138,90 @@ def pending_export(db: Session, limit: int = 500) -> list[RewardRedemption]:
     )
 
 
+def _claim_export(db: Session, row: RewardRedemption, now: datetime) -> bool:
+    """Забирает строку в очередь выгрузки. Второй воркер получает rowcount=0."""
+    result = db.execute(
+        update(RewardRedemption)
+        .where(
+            RewardRedemption.id == row.id,
+            RewardRedemption.status == RedemptionStatus.APPROVED,
+            RewardRedemption.exported_at.is_(None),
+        )
+        .values(exported_at=now)
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount == 1:
+        db.expire(row, ["exported_at"])
+        return True
+    return False
+
+
+def _unclaim_export(db: Session, row: RewardRedemption, claimed_at: datetime) -> None:
+    db.execute(
+        update(RewardRedemption)
+        .where(
+            RewardRedemption.id == row.id,
+            RewardRedemption.exported_at == claimed_at,
+        )
+        .values(exported_at=None)
+        .execution_options(synchronize_session=False)
+    )
+    db.expire(row, ["exported_at"])
+
+
 def export_pending(db: Session) -> dict:
     """Дописывает подтверждённые компенсации в таблицу.
 
-    `exported_at` проставляется только после успешной записи: если Google
-    недоступен, строки останутся в очереди и уедут при следующей попытке.
-    Дублей не будет — повторно берутся только строки без отметки.
+    Строки сначала забираются условным UPDATE, и только потом уходят в Google.
+    Если запись в таблицу падает, отметки снимаются — очередь не теряется.
     """
     rows = pending_export(db)
     if not rows:
         return {"exported": 0, "skipped": "нечего выгружать"}
 
-    worksheet = _worksheet()
-    payload = [_row_for(db, row) for row in rows]
+    now = datetime.now(timezone.utc)
+    claimed: list[RewardRedemption] = []
+    for row in rows:
+        if _claim_export(db, row, now):
+            claimed.append(row)
+
+    if not claimed:
+        return {"exported": 0, "skipped": "уже забрано другим процессом"}
 
     try:
-        worksheet.append_rows(payload, value_input_option="USER_ENTERED")
+        worksheet = _worksheet()
+        worksheet.append_rows(
+            [_row_for(db, row) for row in claimed],
+            value_input_option=VALUE_INPUT_OPTION,
+        )
     except Exception as exc:
+        for row in claimed:
+            _unclaim_export(db, row, now)
         raise SheetsError(f"Не удалось записать в таблицу: {exc}") from exc
 
-    now = datetime.now(timezone.utc)
-    for row in rows:
-        row.exported_at = now
-        db.add(row)
-    db.flush()
-
-    logger.info("В Google Sheets выгружено строк: %s", len(rows))
-    return {"exported": len(rows), "codes": [r.code for r in rows]}
+    logger.info("В Google Sheets выгружено строк: %s", len(claimed))
+    return {"exported": len(claimed), "codes": [r.code for r in claimed]}
 
 
 def export_one(db: Session, redemption: RewardRedemption) -> bool:
     """Выгрузка одной строки сразу после подтверждения.
 
-    Ошибку наружу не пробрасываем: подтверждение кода не должно падать
-    из-за недоступного Google — строка просто останется в очереди.
+    Сетевой сбой пробрасывается как SheetsError: подтверждение кода уже
+    закоммичено отдельно, а строка должна остаться в очереди.
     """
     if not is_configured() or redemption.exported_at is not None:
         return False
-    try:
-        worksheet = _worksheet()
-        worksheet.append_rows([_row_for(db, redemption)], value_input_option="USER_ENTERED")
-    except Exception as exc:
-        logger.warning("Строка %s не уехала в таблицу, останется в очереди: %s", redemption.code, exc)
+
+    now = datetime.now(timezone.utc)
+    if not _claim_export(db, redemption, now):
         return False
 
-    redemption.exported_at = datetime.now(timezone.utc)
-    db.add(redemption)
-    db.flush()
-    return True
+    try:
+        worksheet = _worksheet()
+        worksheet.append_rows([_row_for(db, redemption)], value_input_option=VALUE_INPUT_OPTION)
+    except Exception as exc:
+        _unclaim_export(db, redemption, now)
+        logger.warning("Строка %s не уехала в таблицу, останется в очереди: %s", redemption.code, exc)
+        raise SheetsError(f"Не удалось записать в таблицу: {exc}") from exc
 
+    return True

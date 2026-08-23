@@ -9,6 +9,7 @@ import re
 from datetime import datetime, timezone
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -104,6 +105,28 @@ def _find(db: Session, club_id: int, session_id: str) -> GameSession | None:
     ).scalar_one_or_none()
 
 
+def _insert_new_session(
+    db: Session, user: User, club: Club, payload
+) -> tuple[GameSession, bool]:
+    """Создаёт сессию. Повторный INSERT с тем же ключом не даёт 500:
+    IntegrityError откатывает только неудачную вставку и возвращает уже
+    существующую строку. Rollback здесь неизбежен: после IntegrityError
+    сессия SQLAlchemy больше не принимает запросы.
+    """
+    try:
+        row = _new_session(db, user, club, payload)
+        achievements.on_session_started(db, user, row)
+        return row, True
+    except IntegrityError:
+        db.rollback()
+        existing = _find(db, club.id, payload.session_id)
+        if existing is None:
+            raise SessionIngestError(
+                f"Не удалось сохранить сессию {payload.session_id}"
+            ) from None
+        return existing, False
+
+
 def start_session(db: Session, club: Club, payload) -> tuple[GameSession, bool]:
     """Идемпотентно: повторный вебхук с тем же session_id в рамках клуба ничего не меняет."""
     existing = _find(db, club.id, payload.session_id)
@@ -119,9 +142,7 @@ def start_session(db: Session, club: Club, payload) -> tuple[GameSession, bool]:
     if user is None:
         raise UserNotLinked("гость не привязан к программе лояльности")
 
-    row = _new_session(db, user, club, payload)
-    achievements.on_session_started(db, user, row)
-    return row, True
+    return _insert_new_session(db, user, club, payload)
 
 
 def end_session(db: Session, club: Club, payload) -> tuple[GameSession, bool]:
@@ -137,8 +158,7 @@ def end_session(db: Session, club: Club, payload) -> tuple[GameSession, bool]:
         )
         if user is None:
             raise UserNotLinked("гость не привязан к программе лояльности")
-        row = _new_session(db, user, club, payload)
-        achievements.on_session_started(db, user, row)
+        row, _created = _insert_new_session(db, user, club, payload)
     else:
         user = db.get(User, row.user_id)
 
@@ -163,7 +183,6 @@ def end_session(db: Session, club: Club, payload) -> tuple[GameSession, bool]:
     referrals.on_session_closed(db, user)
 
     return row, True
-
 
 
 # --- статистика для гостя ---
