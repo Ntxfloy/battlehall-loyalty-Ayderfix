@@ -5,7 +5,6 @@
 """
 
 import secrets
-from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -13,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.models import (
     PrizeKind,
     Reward,
+    RewardRedemption,
     TxReason,
     User,
     Wheel,
@@ -21,16 +21,9 @@ from app.models import (
 )
 from app.services import achievements, pts, rewards
 
-# Сколько ячеек показываем в ленте прокрутки. Победитель ставится ближе к концу,
-# чтобы лента успела «разогнаться» и затормозить на нём.
 REEL_LENGTH = 60
 WINNER_INDEX = REEL_LENGTH - 8
-
-# Разрешённые размеры пачки прокруток — ровно то, что предлагает мини-апп кнопками.
 SPIN_COUNTS: tuple[int, ...] = (1, 5, 10)
-
-# ALL IN не ограничен размером пачки — только этим потолком, чтобы гость
-# с огромным балансом не заказал сотни параллельных лент за один запрос.
 ALL_IN_CAP = 20
 
 
@@ -55,7 +48,6 @@ def prizes_of(db: Session, wheel_id: int, only_active: bool = True) -> list[Whee
 
 
 def chance_of(prize: WheelPrize, pool: list[WheelPrize]) -> float:
-    """Шанс в процентах — показываем гостю, чтобы механика не выглядела чёрным ящиком."""
     total = sum(p.weight for p in pool if p.weight > 0)
     if total <= 0:
         return 0.0
@@ -63,8 +55,6 @@ def chance_of(prize: WheelPrize, pool: list[WheelPrize]) -> float:
 
 
 def _pick(pool: list[WheelPrize]) -> WheelPrize:
-    """Взвешенный выбор на криптостойком источнике: обычный random
-    предсказуем по предыдущим результатам, а тут разыгрываются деньги."""
     weights = [max(p.weight, 0) for p in pool]
     total = sum(weights)
     if total <= 0:
@@ -76,14 +66,10 @@ def _pick(pool: list[WheelPrize]) -> WheelPrize:
         upto += weight
         if roll < upto:
             return prize
-    return pool[-1]   # недостижимо, но пусть функция всегда что-то возвращает
+    return pool[-1]
 
 
 def _build_reel(pool: list[WheelPrize], winner: WheelPrize) -> list[dict]:
-    """Лента для анимации: случайные ячейки, на позиции WINNER_INDEX — победитель.
-
-    Ячейки берём тем же взвешенным розыгрышем, чтобы визуально лента
-    соответствовала реальным шансам, а не показывала легендарки на каждом шагу."""
     reel = []
     for index in range(REEL_LENGTH):
         prize = winner if index == WINNER_INDEX else _pick(pool)
@@ -92,9 +78,6 @@ def _build_reel(pool: list[WheelPrize], winner: WheelPrize) -> list[dict]:
 
 
 def _resolve_one(db: Session, user: User, wheel: Wheel, pool: list[WheelPrize]) -> dict:
-    """Один розыгрыш приза: выбор победителя, выдача выигрыша, лента для анимации.
-    Списание стоимости сюда не входит — при пачке прокруток оно одно на всех
-    (см. spin()), а не по счётчику на каждый розыгрыш."""
     winner = _pick(pool)
 
     spin_row = WheelSpin(
@@ -124,8 +107,6 @@ def _resolve_one(db: Session, user: User, wheel: Wheel, pool: list[WheelPrize]) 
     elif winner.kind == PrizeKind.REWARD and winner.reward_id:
         reward = db.get(Reward, winner.reward_id)
         if reward is None or not reward.is_active:
-            # Награду выключили из каталога уже после настройки ленты —
-            # не оставляем гостя ни с чем, возвращаем стоимость этой прокрутки.
             pts.credit(
                 db,
                 user,
@@ -158,10 +139,6 @@ def _resolve_one(db: Session, user: User, wheel: Wheel, pool: list[WheelPrize]) 
 
 
 def spin(db: Session, user: User, wheel_id: int, count: int = 1, all_in: bool = False) -> dict:
-    """Прокрутка одной лентой `count` раз (1, 5 или 10 — см. SPIN_COUNTS) за один
-    поход, либо ALL IN — на весь баланс сразу (сколько прокруток войдёт, вплоть
-    до ALL_IN_CAP). Стоимость списывается один раз общей суммой — либо вся
-    пачка, либо ничего, если PTS не хватает даже на одну прокрутку из неё."""
     wheel = db.get(Wheel, wheel_id)
     if wheel is None or not wheel.is_active:
         raise WheelError("Лента недоступна")
@@ -193,7 +170,6 @@ def spin(db: Session, user: User, wheel_id: int, count: int = 1, all_in: bool = 
     achievements.on_pts_changed(db, user)
 
     return {
-
         "balance": user.pts_balance,
         "cost_pts": total_cost,
         "count": count,
@@ -214,13 +190,27 @@ def history(db: Session, user_id: int, limit: int = 30) -> list[WheelSpin]:
 
 
 def stats(db: Session, wheel_id: int) -> dict:
-    """Фактическая отдача ленты — владельцу важно видеть, совпадает ли
-    реальность с настроенными весами."""
+    """Фактическая отдача ленты. PTS и рублёвые призы считаются отдельно:
+    иначе владелец видит 12% при реальной отдаче в сотни процентов."""
     spins = list(
         db.execute(select(WheelSpin).where(WheelSpin.wheel_id == wheel_id)).scalars()
     )
     spent = sum(s.cost_pts for s in spins)
     won = sum(s.pts_won for s in spins)
+    redemption_ids = [s.redemption_id for s in spins if s.redemption_id]
+    payouts: dict[int, float] = {}
+    if redemption_ids:
+        rows = db.execute(
+            select(RewardRedemption).where(RewardRedemption.id.in_(redemption_ids))
+        ).scalars()
+        payouts = {
+            r.id: float(r.payout_value or 0)
+            for r in rows
+            if r.payout_unit == "RUB"
+        }
+    reward_payout_value = sum(
+        payouts.get(s.redemption_id, 0) for s in spins if s.redemption_id
+    )
     by_prize: dict[str, int] = {}
     for s in spins:
         by_prize[s.prize_title] = by_prize.get(s.prize_title, 0) + 1
@@ -229,6 +219,7 @@ def stats(db: Session, wheel_id: int) -> dict:
         "spins": len(spins),
         "pts_spent": spent,
         "pts_won": won,
+        "reward_payout_value": reward_payout_value,
         "payout_percent": round(won / spent * 100, 1) if spent else 0.0,
         "by_prize": by_prize,
     }

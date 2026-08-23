@@ -286,7 +286,7 @@ async function loadLootAdmin() {
           body: JSON.stringify(collectRow('#wheelsList', 'data-prize', id)),
         });
         toast('Сохранено');
-        loadLootAdmin();   // шансы пересчитываются от весов — перерисовываем
+        loadLootAdmin();
       } catch (error) {
         toast(error.message);
         btn.disabled = false;
@@ -324,6 +324,11 @@ async function loadLootAdmin() {
 function permLabel(code) {
   const found = (state.permissionCatalog || []).find((p) => p.code === code);
   return found ? found.label : code;
+}
+
+function closePermissionEditor() {
+  $('#permEditor').hidden = true;
+  $('#permEditorBackdrop').hidden = true;
 }
 
 async function loadAdmins() {
@@ -399,8 +404,8 @@ function openPermissionEditor(admin) {
   const available = state.permissionCatalog.filter((p) => !p.owner_only);
   const checked = new Set(admin.permissions);
 
-  $('#userDetailTitle').textContent = `Права: ${admin.username}`;
-  $('#userDetailBody').innerHTML = `
+  $('#permEditorTitle').textContent = `Права: ${admin.username}`;
+  $('#permEditorBody').innerHTML = `
     <div class="perm-grid">
       ${available.map((p) => `
         <label class="perm-item">
@@ -411,23 +416,27 @@ function openPermissionEditor(admin) {
     </div>
     <button class="btn primary block" id="permSave" style="margin-top:18px">Сохранить права</button>
   `;
-  $('#userDetail').hidden = false;
+  $('#permEditor').hidden = false;
+  $('#permEditorBackdrop').hidden = false;
 
   $('#permSave').addEventListener('click', async () => {
-    const permissions = $$('#userDetailBody input[type="checkbox"]:checked').map((i) => i.value);
+    const permissions = $$('#permEditorBody input[type="checkbox"]:checked').map((i) => i.value);
     try {
       await api(`/api/console/admins/${admin.id}`, {
         method: 'PATCH',
         body: JSON.stringify({ permissions }),
       });
       toast('Права сохранены');
-      $('#userDetail').hidden = true;
+      closePermissionEditor();
       loadAdmins();
     } catch (error) {
       toast(error.message);
     }
   });
 }
+
+$('#permEditorClose').addEventListener('click', closePermissionEditor);
+$('#permEditorBackdrop').addEventListener('click', closePermissionEditor);
 
 // --- формы создания ---
 
@@ -527,7 +536,7 @@ async function loadOasysMap() {
     const session = d.session || null;
     return `
       <tr>
-        <td>${d.number}</td>
+        <td>${esc(d.number)}</td>
         <td>${esc(d.loyalty_zone_title || d.zone_name || '—')}</td>
         <td>${pcStatusBadge(d)}</td>
         <td>${session ? esc(session.username || session.user_type_id || '') : '—'}</td>
@@ -537,13 +546,13 @@ async function loadOasysMap() {
   $('#oasysMapTable').innerHTML = table(['ПК №', 'Зона', 'Статус', 'Пользователь'], rows);
 
   const stats = [
-    `<div class="stat-tile"><b>${map.in_use}</b><span>занято из ${map.count}</span></div>`,
+    `<div class="stat-tile"><b>${esc(map.in_use)}</b><span>занято из ${esc(map.count)}</span></div>`,
   ];
 
   try {
     const cashier = await api('/api/console/oasys/cashier-stats');
-    stats.push(`<div class="stat-tile"><b>${cashier.earnings}</b><span>выручка за смену</span></div>`);
-    stats.push(`<div class="stat-tile"><b>${cashier.cashier_card_balance}</b><span>баланс безнал</span></div>`);
+    stats.push(`<div class="stat-tile"><b>${esc(cashier.earnings)}</b><span>выручка за смену</span></div>`);
+    stats.push(`<div class="stat-tile"><b>${esc(cashier.cashier_card_balance)}</b><span>баланс безнал</span></div>`);
   } catch (error) {
     // Кассовая статистика необязательна для карты — просто не показываем плитки.
   }
@@ -552,10 +561,10 @@ async function loadOasysMap() {
   try {
     const discounts = await api('/api/console/oasys/discounts');
     const discountRows = discounts.club_discounts.map((d) => `
-      <tr><td>${esc(d.name)}</td><td>${d.discount}%</td></tr>
+      <tr><td>${esc(d.name)}</td><td>${esc(d.discount)}%</td></tr>
     `);
     const promoRows = discounts.promo_codes.map((p) => `
-      <tr><td><code>${esc(p.code)}</code></td><td>${esc(p.type)}</td><td>${p.count}/${p.max_count}</td></tr>
+      <tr><td><code>${esc(p.code)}</code></td><td>${esc(p.type)}</td><td>${esc(p.count)}/${esc(p.max_count)}</td></tr>
     `);
     $('#oasysDiscountsTable').innerHTML = `
       <h3>Клубные скидки</h3>

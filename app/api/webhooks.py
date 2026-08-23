@@ -6,17 +6,17 @@
 сверяется с тем, что хранится в таблице clubs.
 """
 
-import hmac
 import logging
 
 from fastapi import APIRouter, Depends, Header, HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import is_placeholder_secret, secrets_match
 from app.db import get_db
-from app.models import Club
+from app.models import Club, User
 from app.schemas import LinkPhonePayload, SessionEndPayload, SessionStartPayload
-from app.services import clubs, sessions
+from app.services import clubs, referrals, sessions
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +38,6 @@ def _resolve_club(db: Session, slug: str, token: str | None) -> Club:
     return club
 
 
-
-
 @router.post("/{club_slug}/session-start")
 def session_start(
     club_slug: str,
@@ -51,8 +49,6 @@ def session_start(
     try:
         row, created = sessions.start_session(db, club, payload)
     except sessions.UserNotLinked:
-        # Не ошибка интеграции: гость просто ещё не в программе лояльности.
-        # Отвечаем 200, чтобы OASys не ретраил вечно.
         logger.info("club %s, session %s: гость не привязан, пропускаем", club_slug, payload.session_id)
         return {"status": "skipped", "reason": "user_not_linked"}
     except sessions.SessionIngestError as exc:
@@ -91,7 +87,6 @@ def session_end(
     }
 
 
-
 @router.post("/{club_slug}/link-phone")
 def link_phone(
     club_slug: str,
@@ -100,19 +95,19 @@ def link_phone(
     db: Session = Depends(get_db),
 ) -> dict:
     """Бот OASys уже знает связку Telegram <-> телефон. Забираем её себе,
-    чтобы матчить вебхуки сессий на пользователя программы. Привязка телефона
-    сама по себе не клубная (аккаунт гостя один на всю сеть) — slug в пути
-    нужен только для проверки токена того клуба, откуда пришёл вебхук."""
+    чтобы матчить вебхуки сессий на пользователя программы."""
     _resolve_club(db, club_slug, x_oasys_token)
-
-    from app.models import User
-    from app.services import referrals
 
     phone = sessions.normalize_phone(payload.phone)
     if not phone:
         raise HTTPException(status_code=400, detail="Некорректный телефон")
 
+    owner = db.query(User).filter(User.phone == phone).one_or_none()
     user = db.query(User).filter(User.telegram_id == payload.telegram_id).one_or_none()
+
+    if owner is not None and (user is None or owner.id != user.id):
+        raise HTTPException(status_code=409, detail="Телефон уже привязан к другому аккаунту")
+
     if user is None:
         user = User(
             telegram_id=payload.telegram_id,
@@ -124,5 +119,9 @@ def link_phone(
     if payload.client_id:
         user.oasys_client_id = payload.client_id
     db.add(user)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Телефон уже привязан к другому аккаунту") from exc
     return {"status": "linked", "telegram_id": user.telegram_id}

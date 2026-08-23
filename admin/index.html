@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>BATTLEHALL — админка</title>
-  <link rel="stylesheet" href="/static/brand/brand.css?v=7">
-  <link rel="stylesheet" href="/admin/styles.css?v=7">
+  <link rel="stylesheet" href="/static/brand/brand.css?v=8">
+  <link rel="stylesheet" href="/admin/styles.css?v=8">
 </head>
 <body>
   <!-- экран входа -->
@@ -27,6 +27,7 @@
       <nav>
         <button class="nav-item active" data-view="overview" data-perm="reports.view">Обзор</button>
         <button class="nav-item" data-view="desk" data-perm="codes.view">Стойка</button>
+        <button class="nav-item" data-view="codes" data-perm="codes.view">Коды</button>
         <button class="nav-item" data-view="queue" data-perm="codes.approve">Подтверждение</button>
         <button class="nav-item" data-view="users" data-perm="users.view">Пользователи</button>
         <button class="nav-item" data-view="achievements" data-perm="catalog.edit">Достижения</button>
@@ -269,8 +270,17 @@
     </main>
   </div>
 
+  <div id="permEditorBackdrop" class="drawer-backdrop" hidden></div>
+  <div id="permEditor" class="drawer" hidden>
+    <div class="drawer-head">
+      <h2 id="permEditorTitle"></h2>
+      <button class="btn ghost" id="permEditorClose">Закрыть</button>
+    </div>
+    <div id="permEditorBody" class="drawer-body"></div>
+  </div>
+
   <div id="toast" class="toast" hidden></div>
-  <script src="/admin/app.js?v=7"></script>
-  <script src="/admin/sections.js?v=7"></script>
+  <script src="/admin/app.js?v=8"></script>
+  <script src="/admin/sections.js?v=8"></script>
 </body>
 </html>
