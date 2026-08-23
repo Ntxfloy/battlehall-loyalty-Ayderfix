@@ -43,7 +43,6 @@ def find_by_code(db: Session, code: str) -> User | None:
 
 
 def attach(db: Session, user: User, code: str) -> bool:
-    """Привязывает пригласившего. Возвращает False, если привязка невозможна."""
     inviter = find_by_code(db, code)
     if inviter is None or inviter.id == user.id:
         return False
@@ -51,7 +50,6 @@ def attach(db: Session, user: User, code: str) -> bool:
         return False
     if sessions.total_minutes(db, user.id) > 0:
         return False
-
     user.referred_by_id = inviter.id
     db.add(user)
     db.flush()
@@ -59,16 +57,13 @@ def attach(db: Session, user: User, code: str) -> bool:
 
 
 def on_session_closed(db: Session, user: User) -> None:
-    """Проверяет, не пора ли засчитать приглашение пригласившему."""
     if user.referred_by_id is None or user.referral_credited:
         return
     if sessions.total_minutes(db, user.id) < settings.referral_min_minutes:
         return
-
     inviter = db.get(User, user.referred_by_id)
     if inviter is None:
         return
-
     user.referral_credited = True
     db.add(user)
     try:
@@ -84,8 +79,8 @@ def on_session_closed(db: Session, user: User) -> None:
 
 def referral_link(code: str) -> str:
     if settings.bot_username:
-        return f"https://t.me/{settings.bot_username}?start={code}"
-    return f"?start={code}"
+        return "https://t.me/" + settings.bot_username + "?start=" + code
+    return "?start=" + code
 
 
 def summary(db: Session, user: User) -> dict:
