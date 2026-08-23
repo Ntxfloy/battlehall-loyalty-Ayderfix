@@ -1,1 +1,872 @@
-placeholder
+/* Мини-апп BATTLEHALL. Токены и фирменные примитивы — в /static/brand/brand.css,
+   здесь только раскладка под телефон.
+
+   Тему намеренно не наследуем от клиента Telegram: клуб должен узнаваться
+   по своим цветам, а не по светлой теме чужого телефона. */
+
+* { box-sizing: border-box; }
+
+/* Атрибут hidden обязан выигрывать у любого display в этом файле.
+   Без !important правило браузера [hidden]{display:none} проигрывает
+   авторскому `.screen{display:flex}` — и «скрытый» экран остаётся на виду. */
+[hidden] { display: none !important; }
+
+:root { --tabbar-h: 66px; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+button { font: inherit; color: inherit; cursor: pointer; }
+
+/* --- каркас --- */
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 13px 16px;
+  background: rgba(7, 7, 10, 0.94);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+}
+
+/* Логотип из брендбука вместо текстового названия */
+.topbar .logo { height: 20px; display: block; }
+
+.balance {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  color: #fff;
+  background: var(--accent);
+  padding: 5px 16px 5px 12px;
+  clip-path: polygon(6px 0, 100% 0, calc(100% - 6px) 100%, 0 100%);
+}
+
+#screens {
+  padding: 16px 16px calc(var(--tabbar-h) + 28px);
+}
+
+.screen {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  animation: bh-fade-in var(--dur-slow) var(--ease-out);
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  padding: 16px;
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%);
+}
+
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+
+/* --- главная --- */
+
+.group-card {
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(120% 140% at 100% 0%, rgba(219, 31, 72, 0.20), transparent 60%),
+    var(--surface);
+}
+
+.group-card .group-title {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 21px;
+  letter-spacing: 0.02em;
+  margin-bottom: 6px;
+}
+
+.group-card .discount {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--bh-cyan);
+  border: 1px solid rgba(62, 207, 209, 0.4);
+  padding: 3px 10px;
+  margin-bottom: 16px;
+}
+
+/* Прогресс в фирменном градиенте: скарлет -> синий -> голубой */
+.progress {
+  height: 6px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.progress > i {
+  display: block;
+  height: 100%;
+  background: var(--bh-gradient);
+  transition: width 0.35s ease;
+}
+
+.progress-legend {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 8px;
+}
+
+.stats-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.stat {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  padding: 14px 8px;
+  text-align: center;
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 9px), calc(100% - 9px) 100%, 0 100%);
+}
+
+.stat b {
+  display: block;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 23px;
+  font-weight: 700;
+}
+
+.stat span { font-size: 10px; color: var(--muted); line-height: 1.3; display: block; margin-top: 5px; }
+
+.daily-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  border-color: rgba(219, 31, 72, 0.35);
+}
+
+.daily-card .grow { flex: 1; }
+
+/* --- кнопки --- */
+
+.btn {
+  border: none;
+  padding: 10px 18px;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  background: var(--accent);
+  color: #fff;
+  white-space: nowrap;
+  clip-path: polygon(7px 0, 100% 0, calc(100% - 7px) 100%, 0 100%);
+}
+
+.btn:disabled { background: var(--surface-2); color: var(--muted); cursor: default; }
+.btn.block { width: 100%; margin-top: 12px; }
+
+/* Второстепенная кнопка: контурная, чтобы не сливаться с поверхностью,
+   на которой лежит (в .ref-link фон такой же, как у сплошной ghost-кнопки). */
+.btn.ghost {
+  background: transparent;
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+/* --- сегменты --- */
+
+.segmented {
+  display: flex;
+  gap: 2px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  padding: 3px;
+}
+
+.seg {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  padding: 9px 4px;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.seg.active { background: var(--accent); color: #fff; }
+
+/* --- списки достижений и наград --- */
+
+.list { display: flex; flex-direction: column; gap: 10px; }
+
+.item {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  padding: 14px 16px;
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%);
+}
+
+.item.done { border-color: rgba(62, 207, 209, 0.45); }
+.item.locked { opacity: 0.5; }
+
+.item-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.item-title {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 15px;
+  letter-spacing: 0.02em;
+}
+
+.item-pts {
+  font-family: var(--font-display);
+  font-style: italic;
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.item-desc { color: var(--muted); font-size: 13px; margin: 7px 0 11px; line-height: 1.45; }
+
+.item-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 11px;
+}
+
+.badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 4px 9px;
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+.badge.ok { background: var(--success-soft); color: var(--bh-cyan); }
+.badge.warn { background: var(--warning-soft); color: var(--bh-gold); }
+
+/* --- код награды --- */
+
+.code-card {
+  position: relative;
+  background:
+    linear-gradient(135deg, rgba(219, 31, 72, 0.28), rgba(62, 207, 209, 0.12)),
+    var(--surface);
+  border: 1px solid var(--accent);
+  padding: 20px;
+  text-align: center;
+  margin-bottom: 12px;
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%);
+  animation: bh-pop-in var(--dur-slow) var(--ease-spring);
+}
+
+.code-value {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  margin: 10px 0 6px;
+}
+
+/* --- профиль --- */
+
+.accordion { border: 1px solid var(--border); overflow: hidden; }
+
+.acc-head {
+  width: 100%;
+  text-align: left;
+  background: var(--surface);
+  border: none;
+  padding: 15px 16px;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.acc-body { background: var(--surface-2); padding: 4px 16px 14px; }
+
+.row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.row:last-child { border-bottom: none; }
+.row .r-main { display: flex; flex-direction: column; gap: 2px; }
+.row .r-sub { color: var(--muted); font-size: 12px; }
+.amount.plus { color: var(--bh-cyan); font-weight: 700; }
+.amount.minus { color: var(--danger); font-weight: 700; }
+
+.ref-link {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  background: var(--surface-2);
+  padding: 10px 12px;
+  margin-top: 12px;
+}
+
+.ref-link input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  outline: none;
+}
+
+/* --- таббар --- */
+
+.tabbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
+  padding-bottom: env(safe-area-inset-bottom);
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  background: rgba(19, 19, 27, 0.97);
+  backdrop-filter: blur(12px);
+  border-top: 1px solid var(--border);
+}
+
+.tab {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  position: relative;
+}
+
+.tab .ico { font-size: 15px; line-height: 1; }
+.tab.active { color: var(--accent); }
+
+/* Активная вкладка подчёркнута фирменным градиентом */
+.tab.active::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 18%;
+  right: 18%;
+  height: 2px;
+  background: var(--bh-gradient);
+}
+
+/* --- прочее --- */
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--tabbar-h) + 20px);
+  background: var(--surface-2);
+  border: 1px solid var(--accent);
+  color: var(--text);
+  padding: 11px 18px;
+  font-size: 14px;
+  max-width: 88vw;
+  text-align: center;
+  z-index: 50;
+  clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%);
+  animation: bh-toast-in var(--dur) var(--ease-out) forwards;
+}
+
+@keyframes bh-toast-in {
+  from { opacity: 0; transform: translate(-50%, 10px) scale(0.96); }
+  to   { opacity: 1; transform: translate(-50%, 0) scale(1); }
+}
+
+.empty { text-align: center; color: var(--muted); font-size: 14px; padding: 28px 12px; }
+
+.skeleton {
+  background: linear-gradient(90deg, var(--surface) 25%, var(--surface-2) 50%, var(--surface) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.3s infinite;
+  height: 84px;
+}
+
+@keyframes shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+/* ============================================================
+   ЛУДЛЕНТА
+   ============================================================ */
+
+/* Редкость приза читается цветом: обычный — серый, дальше по фирменной
+   палитре к легендарному золоту. */
+.rarity-common    { --rarity: #6B7280; }
+.rarity-rare      { --rarity: var(--bh-cyan); }
+.rarity-epic      { --rarity: var(--accent); }
+.rarity-legendary { --rarity: var(--bh-gold); }
+
+.loot-card { margin-bottom: 12px; }
+
+.loot-prizes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 12px 0 4px;
+}
+
+.loot-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  padding: 5px 9px;
+  background: var(--surface-2);
+  border-left: 2px solid var(--rarity, var(--border));
+}
+
+.loot-chip b { color: var(--rarity, var(--muted)); font-size: 11px; }
+
+/* --- оверлей прокрутки --- */
+
+.spin-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: rgba(7, 7, 10, 0.94);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  animation: bh-fade-in var(--dur) var(--ease-out);
+}
+
+.spin-box { width: 100%; max-width: 460px; }
+
+.spin-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  margin-bottom: 14px;
+}
+
+.spin-title {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  text-align: center;
+}
+
+/* Кнопка «Пропустить» — только у пачек x5/x10/ALL IN, не у одиночной прокрутки. */
+#spinSkipBtn {
+  position: absolute;
+  right: 0;
+  padding: 6px 12px;
+}
+
+/* Контейнер лент: одна на x1 (см. .reel-window без .mini), несколько
+   параллельных на x5/x10 — едут и тормозят одновременно, каскадом
+   (см. REEL_STAGGER_MS в app.js), а не по очереди. */
+.reels-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 56vh;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.reel-window {
+  position: relative;
+  overflow: hidden;
+  height: 96px;
+  /* Без этого флексбокс на большой пачке (x10/ALL IN) сжимает ленты, чтобы
+     впихнуть все в max-height контейнера, вместо того чтобы просто скроллить —
+     они наслаиваются друг на друга. flex-shrink:0 держит заявленную высоту. */
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  /* растворяем края, чтобы лента «выезжала» из темноты, а не обрывалась */
+  mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent);
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent);
+}
+
+/* Компактная лента для параллельного показа x5/x10 — ширина ячейки та же
+   (иначе разъедется расчёт смещения в app.js), только ниже. */
+.reel-window.mini { height: 56px; }
+.reel-window.mini .reel-cell { font-size: 10px; padding: 4px; }
+
+/* Метка, под которой останавливается выигрышная ячейка. Пульсирует всё
+   время, пока лента открыта, — держит напряжение, как подсветка на слоте. */
+.reel-marker {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--accent);
+  z-index: 2;
+  animation: bh-marker-pulse 900ms ease-in-out infinite;
+}
+
+@keyframes bh-marker-pulse {
+  0%, 100% { box-shadow: 0 0 12px rgba(219, 31, 72, 0.8); }
+  50%      { box-shadow: 0 0 20px 3px rgba(219, 31, 72, 1); }
+}
+
+/* Отдача при приземлении — по редкости приза, common/пусто без спецэффекта.
+   --glow-color берёт цвет из фирменной палитры (та же, что и .rarity-*). */
+@keyframes bh-reel-glow {
+  0%   { box-shadow: 0 0 0 0 var(--glow-color); }
+  35%  { box-shadow: 0 0 26px 6px var(--glow-color); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+@keyframes bh-reel-shake {
+  0%, 100% { transform: translateX(0); }
+  20%      { transform: translateX(-5px); }
+  40%      { transform: translateX(4px); }
+  60%      { transform: translateX(-3px); }
+  80%      { transform: translateX(2px); }
+}
+
+.reel-hit-rare      { --glow-color: var(--bh-cyan); animation: bh-reel-glow 700ms ease-out; z-index: 1; }
+.reel-hit-epic       { --glow-color: var(--accent);  animation: bh-reel-glow 750ms ease-out, bh-reel-shake 350ms ease-out; z-index: 1; }
+.reel-hit-legendary  { --glow-color: var(--bh-gold);  animation: bh-reel-glow 900ms ease-out, bh-reel-shake 450ms ease-out; z-index: 1; }
+
+/* Джекпот трясёт весь экран, не только ленту — момент должен читаться сразу. */
+@keyframes bh-jackpot-shake {
+  0%, 100% { transform: translate(0, 0); }
+  10%      { transform: translate(-3px, 2px); }
+  30%      { transform: translate(3px, -2px); }
+  50%      { transform: translate(-4px, 0); }
+  70%      { transform: translate(4px, 2px); }
+  90%      { transform: translate(-2px, -1px); }
+}
+
+body.jackpot-shake { animation: bh-jackpot-shake 500ms ease-in-out; }
+
+/* Золотая вспышка по всему оверлею на выигрышный итог (баланс PTS в плюсе
+   или пойман приз-награда) — поверх лент и карточки результата. */
+.win-flash {
+  position: fixed;
+  inset: 0;
+  z-index: 92;
+  pointer-events: none;
+  background: radial-gradient(circle, rgba(245, 174, 8, 0.55), transparent 70%);
+  opacity: 0;
+}
+
+.win-flash.play { animation: bh-win-flash 900ms ease-out; }
+
+@keyframes bh-win-flash {
+  0%   { opacity: 0; }
+  25%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+.outcome-banner {
+  margin-top: 14px;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  animation: bh-pop-in var(--dur-slow) var(--ease-spring);
+}
+
+/* Радужный пульс на сумму выигрыша — на отдельном вложенном элементе:
+   у .outcome-banner уже своя анимация входа (bh-pop-in) на transform,
+   а это ещё две (цвет + пульс масштаба) на transform/фон, чтобы не сталкивались. */
+.outcome-amount {
+  display: inline-block;
+  font-size: 20px;
+  background: linear-gradient(90deg, #ff3b3b, #ffae08, #f5f108, #3ecf71, #3ecfd1, #6b8cff, #c65bff, #ff3b3b);
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: bh-rainbow-cycle 1.8s linear infinite, bh-rainbow-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes bh-rainbow-cycle {
+  0%   { background-position: 0% 50%; }
+  100% { background-position: 300% 50%; }
+}
+
+@keyframes bh-rainbow-pulse {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.1); }
+}
+
+/* --- монетки с неба на выигрыш --- */
+
+.coin-rain {
+  position: fixed;
+  inset: 0;
+  z-index: 93;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.coin {
+  position: absolute;
+  top: -40px;
+  left: var(--x);
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #fff6d8, var(--bh-gold) 45%, #a56f00 100%);
+  box-shadow: 0 0 6px rgba(245, 174, 8, 0.7);
+  animation: bh-coin-fall var(--fall-duration) linear var(--fall-delay) forwards;
+}
+
+@keyframes bh-coin-fall {
+  0%   { transform: translateY(0) rotate(0deg); opacity: 1; }
+  85%  { opacity: 1; }
+  100% { transform: translateY(var(--fall-distance)) rotate(var(--spin)); opacity: 0; }
+}
+
+/* --- WASTED (GTA-стиль) на минус по итогу прокрутки --- */
+
+.wasted-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 95;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(10, 10, 12, 0);
+  pointer-events: none;
+}
+
+.wasted-overlay.play { animation: bh-wasted-bg 2200ms ease-in-out; }
+
+@keyframes bh-wasted-bg {
+  0%   { background: rgba(10, 10, 12, 0); }
+  15%  { background: rgba(10, 10, 12, 0.72); }
+  85%  { background: rgba(10, 10, 12, 0.72); }
+  100% { background: rgba(10, 10, 12, 0); }
+}
+
+.wasted-text {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 700;
+  font-size: 56px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #cfcfd6;
+  text-shadow: 0 3px 0 #000, 0 0 26px rgba(0, 0, 0, 0.9);
+  opacity: 0;
+  filter: grayscale(1);
+}
+
+.wasted-overlay.play .wasted-text { animation: bh-wasted-text 2200ms ease-in-out; }
+
+@keyframes bh-wasted-text {
+  0%   { opacity: 0; transform: scale(1.35); letter-spacing: 0.3em; }
+  20%  { opacity: 1; transform: scale(1); letter-spacing: 0.06em; }
+  80%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* --- подтверждение ALL IN: свой оверлей вместо window.confirm/tg.showConfirm --- */
+
+.allin-confirm-box { text-align: center; }
+
+.allin-confirm-title {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 700;
+  font-size: 30px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--bh-gold);
+  text-shadow: 0 0 18px rgba(245, 174, 8, 0.5);
+  margin-bottom: 10px;
+}
+
+.allin-confirm-message {
+  color: var(--muted);
+  font-size: 14px;
+  margin-bottom: 20px;
+}
+
+.allin-confirm-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.allin-confirm-actions .btn { flex: 1; }
+
+.reel {
+  display: flex;
+  gap: 8px;
+  padding: 10px 0;
+  height: 100%;
+  align-items: stretch;
+  will-change: transform;
+}
+
+.reel-cell {
+  flex: 0 0 116px;      /* совпадает с REEL_CELL_WIDTH в app.js */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--surface-2);
+  border-bottom: 3px solid var(--rarity, var(--border));
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%);
+}
+
+.spin-result {
+  text-align: center;
+  margin-top: 20px;
+  animation: bh-pop-in var(--dur-slow) var(--ease-spring);
+}
+
+.prize-label {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.prize-title {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 700;
+  font-size: 26px;
+  text-transform: uppercase;
+  margin: 6px 0;
+  color: var(--rarity, var(--text));
+}
+
+.prize-code {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  margin-top: 10px;
+  letter-spacing: 0.1em;
+}
+
+/* --- выбор количества прокруток (x1 / x5 / x10) --- */
+
+.loot-spin-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.loot-spin-row .btn {
+  flex: 1;
+  padding: 10px 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.loot-spin-cost {
+  font-family: var(--font-body);
+  font-style: normal;
+  font-weight: 500;
+  font-size: 10px;
+  letter-spacing: normal;
+  text-transform: none;
+  opacity: 0.85;
+}
+
+/* --- ALL IN: спустить весь баланс разом --- */
+
+.btn.allin {
+  background: linear-gradient(90deg, var(--bh-gold), var(--accent) 50%, var(--bh-gold));
+  background-size: 220% 100%;
+  color: #1a1005;
+  animation: shimmer 2.4s linear infinite, bh-allin-pulse 1.3s ease-in-out infinite;
+}
+
+.btn.allin:disabled {
+  animation: none;
+  background: var(--surface-2);
+  color: var(--muted);
+  box-shadow: none;
+}
+
+@keyframes bh-allin-pulse {
+  0%, 100% { box-shadow: 0 0 10px rgba(245, 174, 8, 0.35); }
+  50%      { box-shadow: 0 0 22px rgba(245, 174, 8, 0.8); }
+}
+
+/* --- сводка результатов пачки x5/x10 --- */
+
+.multi-prize-grid {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.multi-prize-chip {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 10px;
+  background: var(--surface-2);
+  border-left: 2px solid var(--rarity, var(--border));
+  color: var(--rarity, var(--text));
+}
