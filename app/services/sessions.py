@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.models import Club, GameSession, User
 from app.periods import ensure_utc, game_day
+from app.schemas import MAX_SESSION_MINUTES
 from app.services import achievements
 from app.zones import parse_overrides, zone_for_pc_in_club
 
@@ -169,6 +170,7 @@ def end_session(db: Session, club: Club, payload) -> tuple[GameSession, bool]:
     minutes = payload.duration_minutes
     if minutes is None:
         minutes = max(int((ended_at - ensure_utc(row.started_at)).total_seconds() // 60), 0)
+    minutes = min(max(int(minutes), 0), MAX_SESSION_MINUTES)
 
     row.ended_at = ended_at
     row.duration_minutes = minutes
