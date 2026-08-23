@@ -5,6 +5,11 @@
 кнопку запуска Mini App, приём deep-link с реферальным кодом и отправку
 уведомлений (тот самый колокольчик).
 
+Уведомления бот не получает от веб-приложения напрямую: сервисы кладут событие
+в таблицу `notification_outbox` в своей транзакции, а здешний воркер
+(`outbox_worker`) разбирает очередь. Так ручка API не ждёт сеть Telegram и не
+падает, если Telegram недоступен, а сообщение не теряется при перезапуске.
+
 Запуск: python -m bot.main
 """
 
@@ -27,13 +32,21 @@ from sqlalchemy.exc import IntegrityError
 from app.config import get_settings
 from app.db import SessionLocal, init_db
 from app.models import User
-from app.services import referrals, sessions
+from app.services import notifications, referrals, sessions
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
 dp = Dispatcher()
+
+# Как часто заглядываем в очередь и по сколько строк берём за раз.
+# 5 секунд — компромисс между живостью уведомлений и холостыми запросами к SQLite.
+OUTBOX_POLL_SECONDS = 5
+OUTBOX_BATCH = 20
+# Telegram режет массовую рассылку примерно на 30 сообщениях в секунду;
+# держимся заметно ниже порога.
+SEND_PAUSE_SECONDS = 0.05
 
 
 class BotUserError(Exception):
@@ -168,10 +181,79 @@ async def save_contact(message: Message) -> None:
 
 
 async def notify(bot: Bot, telegram_id: int, text: str) -> None:
+    """Прямая отправка без очереди. Оставлена для ручных сценариев и отладки;
+    бизнес-события должны идти через notifications.enqueue — только там есть
+    ретраи и защита от дублей."""
     try:
         await bot.send_message(telegram_id, text, reply_markup=_open_app_keyboard())
     except Exception as exc:
         logger.warning("не доставили уведомление %s: %s", telegram_id, exc)
+
+
+def _take_batch() -> list[tuple[int, int, str]]:
+    """Синхронная часть: берёт пачку строк и сразу ставит им «аренду»,
+    чтобы второй экземпляр бота не отправил те же сообщения второй раз.
+    Возвращает простые кортежи: ORM-объекты нельзя тащить в другой поток."""
+    with SessionLocal() as db:
+        rows = notifications.due(db, limit=OUTBOX_BATCH)
+        batch = [(row.id, row.telegram_id, row.text) for row in rows]
+        notifications.lease(db, [item[0] for item in batch])
+        db.commit()
+    return batch
+
+
+def _settle(sent_ids: list[int], failures: list[tuple[int, str]]) -> None:
+    """Синхронная часть: фиксирует итог пачки одной транзакцией."""
+    if not sent_ids and not failures:
+        return
+    with SessionLocal() as db:
+        notifications.mark_sent(db, sent_ids)
+        for row_id, error in failures:
+            notifications.mark_failed(db, row_id, error)
+        db.commit()
+
+
+async def outbox_worker(bot: Bot) -> None:
+    """Фоновый разбор очереди уведомлений.
+
+    Работа с БД синхронная (SQLAlchemy Session), поэтому выносим её в поток
+    через asyncio.to_thread — иначе блокируется цикл событий и бот перестаёт
+    отвечать на сообщения.
+
+    Ошибка отправки одного сообщения не роняет воркер: строка получает бэкофф
+    и повторится позже; после MAX_ATTEMPTS попыток она уйдёт в failed и останется
+    в таблице для разбора.
+    """
+    logger.info("воркер очереди уведомлений запущен")
+    while True:
+        try:
+            batch = await asyncio.to_thread(_take_batch)
+        except Exception as exc:   # noqa: BLE001 — воркер не имеет права умереть
+            logger.exception("не смогли прочитать очередь уведомлений: %s", exc)
+            await asyncio.sleep(OUTBOX_POLL_SECONDS)
+            continue
+
+        if not batch:
+            await asyncio.sleep(OUTBOX_POLL_SECONDS)
+            continue
+
+        sent_ids: list[int] = []
+        failures: list[tuple[int, str]] = []
+        for row_id, telegram_id, text in batch:
+            try:
+                await bot.send_message(telegram_id, text, reply_markup=_open_app_keyboard())
+                sent_ids.append(row_id)
+            except Exception as exc:   # noqa: BLE001 — любая ошибка Telegram — повод для ретрая
+                logger.warning("не доставили уведомление %s (строка %s): %s", telegram_id, row_id, exc)
+                failures.append((row_id, f"{type(exc).__name__}: {exc}"))
+            await asyncio.sleep(SEND_PAUSE_SECONDS)
+
+        try:
+            await asyncio.to_thread(_settle, sent_ids, failures)
+        except Exception as exc:   # noqa: BLE001
+            # Строки останутся pending с отложенным next_attempt_at и вернутся
+            # в очередь после истечения аренды — хуже, чем дубль, но лучше потери.
+            logger.exception("не смогли зафиксировать итог отправки: %s", exc)
 
 
 async def main() -> None:
@@ -179,7 +261,9 @@ async def main() -> None:
         raise SystemExit("BOT_TOKEN не задан в .env")
     init_db()
     bot = Bot(token=settings.bot_token)
-    await dp.start_polling(bot)
+    # Поллинг и воркер живут в одном процессе: отдельный сервис ради очереди
+    # разворачивать незачем, а токен бота так остаётся в одном месте.
+    await asyncio.gather(dp.start_polling(bot), outbox_worker(bot))
 
 
 if __name__ == "__main__":
