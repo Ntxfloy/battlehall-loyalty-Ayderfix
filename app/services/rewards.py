@@ -11,6 +11,10 @@
 2. Возврат PTS за сгоревший код. У возврата есть естественный ключ идемпотентности —
    сам код, поэтому даже если отметка refunded_at будет сброшена руками
    или регламент запустится дважды, PTS вернутся ровно один раз.
+
+События гостю (код подтверждён, код сгорел) не отправляются отсюда напрямую,
+а ставятся в очередь app/services/notifications.py — в той же транзакции,
+что и само изменение статуса.
 """
 
 import logging
@@ -22,9 +26,16 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models import RedemptionStatus, Reward, RewardRedemption, TxReason, User
+from app.models import (
+    NotificationKind,
+    RedemptionStatus,
+    Reward,
+    RewardRedemption,
+    TxReason,
+    User,
+)
 from app.periods import ensure_utc
-from app.services import achievements, pts
+from app.services import achievements, notifications, pts
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -189,6 +200,18 @@ def _refund_key(row: RewardRedemption) -> str:
     return f"reward_refund:{row.code}"
 
 
+def _notify_expired(db: Session, row: RewardRedemption, refunded_pts: int) -> None:
+    """Сообщаем гостю, что код сгорел. Ключ дедупликации — сам код,
+    поэтому повторный прогон регламента не разбудит человека дважды."""
+    notifications.try_enqueue(
+        db,
+        user_id=row.user_id,
+        kind=NotificationKind.CODE_EXPIRED,
+        text=notifications.code_expired_text(row, refunded_pts),
+        dedup_key=notifications.code_expired_key(row.code),
+    )
+
+
 def expire_due(db: Session, *, user_id: int | None = None, limit: int = 200) -> int:
     now = datetime.now(timezone.utc)
     settings = get_settings()
@@ -221,33 +244,38 @@ def expire_due(db: Session, *, user_id: int | None = None, limit: int = 200) -> 
         if result.rowcount != 1:
             continue
         expired += 1
-        if not settings.refund_pts_on_expire or row.pts_spent <= 0:
-            continue
-        refund_marked = db.execute(
-            update(RewardRedemption)
-            .where(
-                RewardRedemption.id == row.id,
-                RewardRedemption.refunded_at.is_(None),
+        refunded = 0
+        if settings.refund_pts_on_expire and row.pts_spent > 0:
+            refund_marked = db.execute(
+                update(RewardRedemption)
+                .where(
+                    RewardRedemption.id == row.id,
+                    RewardRedemption.refunded_at.is_(None),
+                )
+                .values(refunded_at=now)
+                .execution_options(synchronize_session=False)
             )
-            .values(refunded_at=now)
-            .execution_options(synchronize_session=False)
-        )
-        if refund_marked.rowcount != 1:
-            continue
-        user = db.get(User, row.user_id)
-        if user is None:
-            logger.error("Код %s истёк, но гость %s не найден: возврат PTS не выполнен", row.code, row.user_id)
-            continue
-        pts.credit(
-            db,
-            user,
-            row.pts_spent,
-            reason=TxReason.REWARD_REFUND,
-            ref_type="redemption",
-            ref_id=row.code,
-            comment=f"Возврат за сгоревший код {row.code}",
-            idem_key=_refund_key(row),
-        )
+            if refund_marked.rowcount == 1:
+                user = db.get(User, row.user_id)
+                if user is None:
+                    logger.error(
+                        "Код %s истёк, но гость %s не найден: возврат PTS не выполнен",
+                        row.code,
+                        row.user_id,
+                    )
+                    continue
+                pts.credit(
+                    db,
+                    user,
+                    row.pts_spent,
+                    reason=TxReason.REWARD_REFUND,
+                    ref_type="redemption",
+                    ref_id=row.code,
+                    comment=f"Возврат за сгоревший код {row.code}",
+                    idem_key=_refund_key(row),
+                )
+                refunded = row.pts_spent
+        _notify_expired(db, row, refunded)
     return expired
 
 
@@ -302,13 +330,21 @@ def approve_code(db: Session, code: str, admin: str) -> RewardRedemption:
         fresh = lookup(db, code)
         raise RewardError(_conflict_message(fresh or row))
     db.refresh(row)
+    notifications.try_enqueue(
+        db,
+        user_id=row.user_id,
+        kind=NotificationKind.CODE_APPROVED,
+        text=notifications.code_approved_text(row),
+        dedup_key=notifications.code_approved_key(row.code),
+    )
     return row
 
 
-def _refund_if_needed(db: Session, row: RewardRedemption, now: datetime) -> None:
+def _refund_if_needed(db: Session, row: RewardRedemption, now: datetime) -> int:
+    """Возвращает сумму фактического возврата (0, если возврата не было)."""
     local = get_settings()
     if not local.refund_pts_on_expire or row.pts_spent <= 0:
-        return
+        return 0
     refund_marked = db.execute(
         update(RewardRedemption)
         .where(
@@ -319,11 +355,11 @@ def _refund_if_needed(db: Session, row: RewardRedemption, now: datetime) -> None
         .execution_options(synchronize_session=False)
     )
     if refund_marked.rowcount != 1:
-        return
+        return 0
     user = db.get(User, row.user_id)
     if user is None:
         logger.error("Код %s отклонён как истёкший, гость %s не найден", row.code, row.user_id)
-        return
+        return 0
     pts.credit(
         db,
         user,
@@ -334,6 +370,7 @@ def _refund_if_needed(db: Session, row: RewardRedemption, now: datetime) -> None
         comment=f"Возврат за отклонённый истёкший код {row.code}",
         idem_key=_refund_key(row),
     )
+    return row.pts_spent
 
 
 def reject_code(db: Session, code: str, admin: str) -> RewardRedemption:
@@ -366,8 +403,9 @@ def reject_code(db: Session, code: str, admin: str) -> RewardRedemption:
         raise RewardError(_conflict_message(fresh or row))
     db.refresh(row)
     if new_status == RedemptionStatus.EXPIRED:
-        _refund_if_needed(db, row, now)
+        refunded = _refund_if_needed(db, row, now)
         db.refresh(row)
+        _notify_expired(db, row, refunded)
     return row
 
 

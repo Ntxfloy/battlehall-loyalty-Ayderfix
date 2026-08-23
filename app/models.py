@@ -77,6 +77,22 @@ class RewardKind:
     TELEGRAM_PREMIUM = "premium"  # PTS -> Telegram Premium
 
 
+class NotificationStatus:
+    """Строка очереди уведомлений живёт так:
+    pending -> sent (бот доставил) или failed (попытки кончились)."""
+
+    PENDING = "pending"
+    SENT = "sent"
+    FAILED = "failed"
+
+
+class NotificationKind:
+    CODE_APPROVED = "code_approved"
+    CODE_EXPIRED = "code_expired"
+    REFERRAL_CREDITED = "referral_credited"
+    PTS_GRANTED = "pts_granted"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -380,3 +396,42 @@ class WheelSpin(Base):
     redemption_id: Mapped[int | None] = mapped_column(ForeignKey("reward_redemptions.id"))
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class NotificationOutbox(Base):
+    """Очередь сообщений гостю в Telegram.
+
+    Веб-приложение не ходит в Telegram само: токен бота живёт в отдельном
+    процессе, а синхронная ручка не должна ждать сеть и падать из-за неё.
+    Событие пишется сюда в той же транзакции, что и само действие (подтверждение
+    кода, сгорание кода, засчитанный реферал), а бот разбирает очередь фоном.
+
+    dedup_key — естественный ключ события (например, код награды). Уникальный
+    индекс не даёт поставить одно и то же уведомление дважды, даже если
+    регламентный прогон повторится.
+    """
+
+    __tablename__ = "notification_outbox"
+    __table_args__ = (
+        Index("ix_outbox_status_next_attempt", "status", "next_attempt_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    # Снимок telegram_id: воркеру не нужно join'ить users, а смена аккаунта
+    # не переадресует уже поставленное в очередь сообщение чужому человеку.
+    telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
+
+    kind: Mapped[str] = mapped_column(String(32), index=True)
+    text: Mapped[str] = mapped_column(Text)
+    dedup_key: Mapped[str | None] = mapped_column(String(128), unique=True, index=True)
+
+    status: Mapped[str] = mapped_column(String(16), default=NotificationStatus.PENDING, index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_error: Mapped[str | None] = mapped_column(Text)
+
+    # Когда строку можно брать в работу: и первичная отправка, и бэкофф,
+    # и «аренда» взятой воркером строки выражаются одним полем.
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
