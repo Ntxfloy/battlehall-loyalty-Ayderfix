@@ -121,11 +121,10 @@ def _resolve_one(db: Session, user: User, wheel: Wheel, pool: list[WheelPrize]) 
         )
         spin_row.pts_won = winner.pts_amount
 
-
     elif winner.kind == PrizeKind.REWARD and winner.reward_id:
         reward = db.get(Reward, winner.reward_id)
-        if reward is None:
-            # Награду удалили из каталога уже после настройки ленты —
+        if reward is None or not reward.is_active:
+            # Награду выключили из каталога уже после настройки ленты —
             # не оставляем гостя ни с чем, возвращаем стоимость этой прокрутки.
             pts.credit(
                 db,

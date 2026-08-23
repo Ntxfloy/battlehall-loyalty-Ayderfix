@@ -60,8 +60,6 @@ class LinkPhonePayload(BaseModel):
     client_id: str | None = None
 
 
-# --- Действия из Mini App ---
-
 class RedeemRequest(BaseModel):
     reward_id: int
 
@@ -70,13 +68,9 @@ class ClaimRequest(BaseModel):
     code: str
 
 
-# --- Админские действия ---
-
 class UseCodeRequest(BaseModel):
     code: str
 
-
-# --- Панель администратора ---
 
 class AdminLoginRequest(BaseModel):
     username: str = Field(..., min_length=1, max_length=64)
@@ -94,8 +88,10 @@ class ClubUpdateRequest(BaseModel):
 
 
 class TestSessionStartRequest(BaseModel):
-    """Форма «отправить тестовый вебхук» в панели — тот же путь, что и у
+    """Форма «отправить тестовый вебхук» в панели — тот же путь, что у
     настоящего вебхука OASys, только вызывается напрямую из UI администратора."""
+
+    __test__ = False
 
     club_slug: str
     telegram_id: int
@@ -105,6 +101,8 @@ class TestSessionStartRequest(BaseModel):
 
 
 class TestSessionEndRequest(BaseModel):
+    __test__ = False
+
     club_slug: str
     telegram_id: int
     session_id: str
@@ -112,8 +110,6 @@ class TestSessionEndRequest(BaseModel):
     started_at: datetime | None = None
     duration_minutes: int | None = Field(default=None, ge=0, le=MAX_SESSION_MINUTES)
 
-
-# --- Учётки администраторов ---
 
 class AdminCreateRequest(BaseModel):
     username: str = Field(..., min_length=2, max_length=64)
@@ -139,13 +135,9 @@ class SelfPasswordRequest(BaseModel):
     new_password: str = Field(..., min_length=8, max_length=128)
 
 
-# --- Стойка: поиск гостя и кодов ---
-
 class CodeActionRequest(BaseModel):
     code: str
 
-
-# --- Редактирование каталога ---
 
 class AchievementUpdateRequest(BaseModel):
     title: str | None = None
@@ -179,8 +171,6 @@ class RewardUpdateRequest(BaseModel):
     sort_order: int | None = None
     is_active: bool | None = None
 
-
-# --- ЛУДЛЕНТА ---
 
 class WheelCreateRequest(BaseModel):
     code: str = Field(..., min_length=2, max_length=64)
@@ -224,6 +214,4 @@ class PrizeUpdateRequest(BaseModel):
 class SpinRequest(BaseModel):
     wheel_id: int
     count: Literal[1, 5, 10] = 1
-    # ALL IN: спустить весь баланс на эту ленту разом — count игнорируется,
-    # сервер сам считает, сколько прокруток входит в баланс (см. wheel.spin).
     all_in: bool = False

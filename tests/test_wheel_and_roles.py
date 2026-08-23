@@ -42,8 +42,6 @@ def loot(db):
     return wheel
 
 
-# --- механика ленты ---
-
 def test_spin_charges_cost_and_returns_prize(db, user, loot):
     pts.credit(db, user, 1000, comment="тест")
     db.commit()
@@ -54,7 +52,6 @@ def test_spin_charges_cost_and_returns_prize(db, user, loot):
     assert result["cost_pts"] == 100
     assert result["count"] == 1
     assert prize["title"] in {"200 PTS", "Пусто"}
-    # списали прокрутку, начислили выигрыш (если он был)
     expected = 1000 - 100 + prize["pts_won"]
     assert result["balance"] == expected
 
@@ -99,8 +96,6 @@ def test_multi_spin_charges_once_and_returns_all_results(db, user, loot):
 
 
 def test_multi_spin_is_all_or_nothing(db, user, loot):
-    """500 PTS хватает на 5 прокруток, но не на 10 — вся пачка должна
-    отклоняться, а не списываться частично."""
     pts.credit(db, user, 500, comment="тест")
     db.commit()
 
@@ -113,7 +108,7 @@ def test_multi_spin_is_all_or_nothing(db, user, loot):
 
 
 def test_all_in_spins_as_many_as_balance_allows(db, user, loot):
-    pts.credit(db, user, 1050, comment="тест")   # 1050 // 100 = 10 прокруток, 50 останутся
+    pts.credit(db, user, 1050, comment="тест")
     db.commit()
 
     result = wheel_service.spin(db, user, loot.id, all_in=True)
@@ -125,7 +120,7 @@ def test_all_in_spins_as_many_as_balance_allows(db, user, loot):
 
 
 def test_all_in_is_capped(db, user, loot):
-    pts.credit(db, user, 10_000, comment="тест")   # хватило бы на 100, но потолок — 20
+    pts.credit(db, user, 10_000, comment="тест")
     db.commit()
 
     result = wheel_service.spin(db, user, loot.id, all_in=True)
@@ -134,7 +129,7 @@ def test_all_in_is_capped(db, user, loot):
 
 
 def test_all_in_without_enough_for_one_spin_is_rejected(db, user, loot):
-    pts.credit(db, user, 50, comment="тест")   # меньше цены одной прокрутки (100)
+    pts.credit(db, user, 50, comment="тест")
     db.commit()
 
     with pytest.raises(wheel_service.WheelError):
@@ -145,7 +140,6 @@ def test_all_in_without_enough_for_one_spin_is_rejected(db, user, loot):
 
 
 def test_weights_shape_the_distribution(db, user, loot):
-    """90/10 не обязан дать ровно 90 из 100, но перекос должен быть явным."""
     pts.credit(db, user, 100_000, comment="тест")
     db.commit()
 
@@ -189,24 +183,26 @@ def test_reward_prize_issues_a_code(db, user):
 
     result = wheel_service.spin(db, user, wheel.id)
     assert result["spins"][0]["prize"]["code"] is not None
-    # приз уже оплачен прокруткой — второй раз за него не списываем
     assert result["balance"] == 500 - 50
 
 
 def test_prize_pointing_at_deleted_reward_refunds_the_spin(db, user):
-    """Награду могли удалить из каталога уже после настройки ленты —
+    """Награду могли выключить из каталога уже после настройки ленты —
     гость не должен остаться ни с чем."""
+    reward = db.query(Reward).filter(Reward.code == "cash_300").one()
     wheel = Wheel(code="w_broken", title="Битая лента", cost_pts=70)
     db.add(wheel)
     db.flush()
-    db.add(WheelPrize(wheel_id=wheel.id, title="Фантом", kind=PrizeKind.REWARD, reward_id=9999, weight=1))
+    db.add(WheelPrize(wheel_id=wheel.id, title="Фантом", kind=PrizeKind.REWARD, reward_id=reward.id, weight=1))
+    reward.is_active = False
+    db.add(reward)
     db.commit()
 
     pts.credit(db, user, 300, comment="тест")
     db.commit()
 
     result = wheel_service.spin(db, user, wheel.id)
-    assert result["balance"] == 300      # списали и вернули
+    assert result["balance"] == 300
     assert result["spins"][0]["prize"]["code"] is None
 
 
@@ -226,8 +222,6 @@ def test_spin_history_is_recorded(db, user, loot):
     assert len(wheel_service.history(db, user.id)) == 2
 
 
-# --- права ---
-
 def test_owner_has_every_permission(db):
     from app.models import AdminUser
 
@@ -242,7 +236,6 @@ def test_staff_only_gets_what_owner_granted(db):
 
 
 def test_owner_only_permissions_cannot_be_granted_to_staff(db):
-    """Смысл разделения ролей в том, что сотрудник не аппрувит сам себя."""
     staff = admins_service.create(
         db, "desk2", "password123", permissions=[perms.CODES_SUBMIT, perms.CODES_APPROVE, perms.ADMINS_MANAGE]
     )
@@ -271,8 +264,6 @@ def test_duplicate_admin_username_rejected(db):
         admins_service.create(db, "dupe", "password123")
 
 
-# --- права через API ---
-
 def test_staff_cannot_reach_owner_only_endpoints(client, db):
     admins_service.create(db, "deskuser", "password123", permissions=[perms.CODES_VIEW, perms.CODES_SUBMIT])
     db.commit()
@@ -299,9 +290,6 @@ def test_staff_cannot_approve(client, db, user):
     assert client.post("/api/console/desk/approve", json={"code": "ANYCODE"}).status_code == 403
 
 
-
-# --- поток «внёс код -> аппрув владельца» ---
-
 def _make_code(db, user) -> str:
     pts.credit(db, user, 5000, comment="тест")
     db.commit()
@@ -322,7 +310,6 @@ def test_submitted_code_waits_for_approval(client, db, user):
     assert submitted.status_code == 200
     assert submitted.json()["status"] == RedemptionStatus.SUBMITTED
 
-    # до аппрува строка не попадает в выгрузку для таблицы
     _login(client)
     export = client.get("/api/admin/redemptions").json()["items"]
     assert code not in {row["code"] for row in export}
@@ -360,7 +347,6 @@ def test_rejected_code_returns_to_the_guest(client, db, user):
     rejected = client.post("/api/console/desk/reject", json={"code": code})
     assert rejected.json()["status"] == RedemptionStatus.PENDING
 
-    # код снова можно внести
     assert client.post("/api/console/desk/submit", json={"code": code}).status_code == 200
 
 
@@ -375,8 +361,6 @@ def test_desk_search_finds_code_by_guest_phone(client, db, user):
     assert code in {row["code"] for row in found}
     assert found[0]["guest"]["phone"] == "79990001122"
 
-
-# --- редактирование каталога ---
 
 def test_owner_can_edit_achievement_target(client, db):
     _login(client)
@@ -408,7 +392,7 @@ def test_reward_crud_round_trip(client, db):
 
     client.delete(f"/api/console/rewards/{reward_id}")
     after = {r["id"]: r for r in client.get("/api/console/rewards").json()["items"]}
-    assert after[reward_id]["is_active"] is False   # выключена, но не стёрта
+    assert after[reward_id]["is_active"] is False
 
 
 def test_wheel_and_prize_crud(client, db):
@@ -448,7 +432,7 @@ def test_free_wheel_is_rejected(client, db):
     response = client.post(
         "/api/console/wheels", json={"code": "free", "title": "Бесплатно", "cost_pts": 0}
     )
-    assert response.status_code == 422   # отсекается схемой: cost_pts > 0
+    assert response.status_code == 422
 
 
 def test_manual_pts_grant_and_deduction(client, db, user):
@@ -486,5 +470,3 @@ def test_owner_keeps_owner_only():
 
     owner = AdminUser(username="own", password_hash="x", role=AdminRole.OWNER, permissions="[]")
     assert perms.CODES_APPROVE in perms.granted(owner)
-
-
