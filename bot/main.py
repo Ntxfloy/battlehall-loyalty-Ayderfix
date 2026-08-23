@@ -43,6 +43,14 @@ def _open_app_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def _phone_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="Отправить номер", request_contact=True)]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+
+
 def _get_or_create(db, telegram_id: int, message: Message) -> User:
     user = db.query(User).filter(User.telegram_id == telegram_id).one_or_none()
     if user is None:
@@ -62,6 +70,7 @@ async def start_with_referral(message: Message, command: CommandObject) -> None:
     with SessionLocal() as db:
         user = _get_or_create(db, message.from_user.id, message)
         attached = referrals.attach(db, user, command.args or "")
+        needs_phone = user.phone is None
         db.commit()
 
     text = (
@@ -69,6 +78,14 @@ async def start_with_referral(message: Message, command: CommandObject) -> None:
         if attached
         else ""
     )
+    if needs_phone:
+        await message.answer(
+            text + "Чтобы засчитывать игровые сессии, нужен номер телефона — "
+            "тот же, что привязан к клубной карте.",
+            reply_markup=_phone_keyboard(),
+        )
+        return
+
     await message.answer(
         text + "Открывай приложение: баланс PTS, достижения и награды внутри.",
         reply_markup=_open_app_keyboard(),
@@ -83,15 +100,10 @@ async def start(message: Message) -> None:
         db.commit()
 
     if needs_phone:
-        keyboard = ReplyKeyboardMarkup(
-            keyboard=[[KeyboardButton(text="Отправить номер", request_contact=True)]],
-            resize_keyboard=True,
-            one_time_keyboard=True,
-        )
         await message.answer(
             "Привет! Чтобы засчитывать твои игровые сессии, нужен номер телефона — "
             "тот же, что привязан к клубной карте.",
-            reply_markup=keyboard,
+            reply_markup=_phone_keyboard(),
         )
         return
 
@@ -116,10 +128,9 @@ async def save_contact(message: Message) -> None:
 
 
 async def notify(bot: Bot, telegram_id: int, text: str) -> None:
-    """Точка отправки уведомлений: выполненная ачивка, сгорающий код, начисление."""
     try:
         await bot.send_message(telegram_id, text, reply_markup=_open_app_keyboard())
-    except Exception as exc:  # пользователь мог заблокировать бота
+    except Exception as exc:
         logger.warning("не доставили уведомление %s: %s", telegram_id, exc)
 
 
