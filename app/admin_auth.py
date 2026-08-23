@@ -3,6 +3,10 @@
 Отдельный от Telegram-авторизации гостя контур — сюда заходят люди с клавиатурой,
 поэтому обычная форма логин/пароль, без внешних зависимостей (bcrypt и т.п.),
 чтобы не раздувать requirements.txt ради внутреннего инструмента.
+
+Кука содержит не только admin_id, но и отпечаток текущего пароля. Благодаря
+этому смена пароля (своего или сброс владельцем) мгновенно обесценивает все
+ранее выданные куки — включая ту, из-за которой пароль и меняли.
 """
 
 import base64
@@ -24,6 +28,7 @@ settings = get_settings()
 
 SESSION_COOKIE = "bh_admin_session"
 _PBKDF2_ITERATIONS = 310_000
+_FINGERPRINT_LEN = 16
 
 
 class Caller(NamedTuple):
@@ -32,6 +37,11 @@ class Caller(NamedTuple):
     label: str
     admin: AdminUser | None
     is_service: bool
+
+
+class SessionToken(NamedTuple):
+    admin_id: int
+    fingerprint: str
 
 
 # --- пароли ---
@@ -52,46 +62,76 @@ def verify_password(password: str, stored: str) -> bool:
     return hmac.compare_digest(digest.hex(), digest_hex)
 
 
-# --- подписанная кука сессии: "<admin_id>:<expires_ts>:<hmac>" в base64 ---
+# --- подписанная кука сессии: "<admin_id>:<expires_ts>:<fingerprint>:<hmac>" в base64 ---
 
 def _sign(payload: str) -> str:
     return hmac.new(settings.admin_session_secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
 
 
-def create_session_value(admin_id: int) -> str:
+def session_fingerprint(password_hash: str | None) -> str:
+    """Короткий отпечаток пароля. Сам хеш в куку не кладём даже урезанным:
+    отпечаток снят через HMAC на секрете сессий, из него хеш не восстановить."""
+    if not password_hash:
+        return ""
+    return _sign(f"pwd:{password_hash}")[:_FINGERPRINT_LEN]
+
+
+def create_session_value(admin_id: int, password_hash: str | None = None) -> str:
+    """password_hash не обязателен только по сигнатуре: без него получится
+    заведомо невалидная кука. Всегда передавайте admin.password_hash."""
     expires = int(time.time()) + settings.admin_session_ttl_hours * 3600
-    payload = f"{admin_id}:{expires}"
+    payload = f"{admin_id}:{expires}:{session_fingerprint(password_hash)}"
     token = f"{payload}:{_sign(payload)}"
     return base64.urlsafe_b64encode(token.encode()).decode()
 
 
-def read_session_value(value: str) -> int | None:
+def read_session(value: str) -> SessionToken | None:
+    """Проверяет подпись и срок. Отпечаток пароля сверяется отдельно, уже
+    с учёткой из базы, — см. _admin_from_cookie."""
     try:
         decoded = base64.urlsafe_b64decode(value.encode()).decode()
-        admin_id_str, expires_str, signature = decoded.split(":", 2)
+        admin_id_str, expires_str, fingerprint, signature = decoded.split(":", 3)
     except (ValueError, UnicodeDecodeError):
         return None
 
-    payload = f"{admin_id_str}:{expires_str}"
+    payload = f"{admin_id_str}:{expires_str}:{fingerprint}"
     if not hmac.compare_digest(_sign(payload), signature):
         return None
-    if int(expires_str) < time.time():
+    try:
+        if int(expires_str) < time.time():
+            return None
+        return SessionToken(int(admin_id_str), fingerprint)
+    except ValueError:
         return None
-    return int(admin_id_str)
+
+
+def read_session_value(value: str) -> int | None:
+    """Совместимость со старым кодом: только идентификатор, без учётки."""
+    token = read_session(value)
+    return token.admin_id if token else None
+
+
+def _admin_from_cookie(raw: str | None, db: Session) -> AdminUser | None:
+    """Единая точка проверки куки для панели и для /api/admin/*."""
+    token = read_session(raw) if raw else None
+    if token is None:
+        return None
+
+    admin = db.get(AdminUser, token.admin_id)
+    if admin is None or not admin.is_active:
+        return None
+    if not hmac.compare_digest(token.fingerprint, session_fingerprint(admin.password_hash)):
+        return None
+    return admin
 
 
 # --- FastAPI-зависимости ---
 
 def current_admin_user(request: Request, db: Session = Depends(get_db)) -> AdminUser:
     """Строгая проверка для страниц/API самой панели: только валидная кука."""
-    raw = request.cookies.get(SESSION_COOKIE)
-    admin_id = read_session_value(raw) if raw else None
-    if admin_id is None:
+    admin = _admin_from_cookie(request.cookies.get(SESSION_COOKIE), db)
+    if admin is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Нужен вход в админку")
-
-    admin = db.get(AdminUser, admin_id)
-    if admin is None or not admin.is_active:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Учётка отключена")
     return admin
 
 
@@ -146,19 +186,11 @@ def require_admin_permission(permission: str, *, allow_service_token: bool = Tru
                 )
             return Caller("service-token", None, True)
 
-        raw = request.cookies.get(SESSION_COOKIE)
-        admin_id = read_session_value(raw) if raw else None
-        if admin_id is None:
+        admin = _admin_from_cookie(request.cookies.get(SESSION_COOKIE), db)
+        if admin is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Нужен вход в админку",
-            )
-
-        admin = db.get(AdminUser, admin_id)
-        if admin is None or not admin.is_active:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Учётка отключена или не существует",
             )
 
         if not perms.has(admin, permission):
