@@ -1,7 +1,7 @@
 """Движение PTS. Любое начисление и списание проходит только через этот модуль,
 чтобы баланс и журнал никогда не разъезжались."""
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.models import PtsTransaction, TxReason, User
@@ -14,7 +14,7 @@ class InsufficientFunds(Exception):
         self.available = available
 
 
-def _write(
+def _change_balance(
     db: Session,
     user: User,
     amount: int,
@@ -23,19 +23,53 @@ def _write(
     ref_id: str | None = None,
     comment: str | None = None,
 ) -> PtsTransaction:
-    user.pts_balance += amount
+    """Атомарно меняет баланс и добавляет запись в журнал в той же транзакции.
+
+    Баланс вычисляет база, а не загруженный ORM-объект. Поэтому устаревший
+    экземпляр User не может привести к двойному списанию или потерянному
+    начислению при конкурентных запросах.
+    """
+    if user.id is None:
+        raise ValueError("Пользователь должен быть сохранён до изменения баланса")
+    if amount == 0:
+        raise ValueError("Изменение баланса не может быть нулевым")
+
+    stmt = update(User).where(User.id == user.id)
+    if amount < 0:
+        stmt = stmt.where(User.pts_balance >= -amount)
+
+    new_balance = db.execute(
+        stmt
+        .values(pts_balance=User.pts_balance + amount)
+        .returning(User.pts_balance)
+        .execution_options(synchronize_session=False)
+    ).scalar_one_or_none()
+
+    if new_balance is None:
+        available = db.execute(
+            select(User.pts_balance).where(User.id == user.id)
+        ).scalar_one_or_none()
+        if available is None:
+            raise ValueError("Пользователь не найден")
+        if amount < 0:
+            raise InsufficientFunds(-amount, int(available))
+        raise RuntimeError("Не удалось изменить баланс пользователя")
+
     tx = PtsTransaction(
         user_id=user.id,
         amount=amount,
-        balance_after=user.pts_balance,
+        balance_after=int(new_balance),
         reason=reason,
         ref_type=ref_type,
         ref_id=ref_id,
         comment=comment,
     )
     db.add(tx)
-    db.add(user)
     db.flush()
+
+    # UPDATE выполнен напрямую. Не присваиваем значение ORM-атрибуту, иначе
+    # следующий flush может записать устаревший баланс поверх результата SQL.
+    db.expire(user, ["pts_balance"])
     return tx
 
 
@@ -48,9 +82,9 @@ def credit(
     ref_id: str | None = None,
     comment: str | None = None,
 ) -> PtsTransaction:
-    if amount < 0:
-        raise ValueError("credit ждёт положительную сумму")
-    return _write(db, user, amount, reason, ref_type, ref_id, comment)
+    if amount <= 0:
+        raise ValueError("credit ждёт положительную ненулевую сумму")
+    return _change_balance(db, user, amount, reason, ref_type, ref_id, comment)
 
 
 def debit(
@@ -62,11 +96,9 @@ def debit(
     ref_id: str | None = None,
     comment: str | None = None,
 ) -> PtsTransaction:
-    if amount < 0:
-        raise ValueError("debit ждёт положительную сумму")
-    if user.pts_balance < amount:
-        raise InsufficientFunds(amount, user.pts_balance)
-    return _write(db, user, -amount, reason, ref_type, ref_id, comment)
+    if amount <= 0:
+        raise ValueError("debit ждёт положительную ненулевую сумму")
+    return _change_balance(db, user, -amount, reason, ref_type, ref_id, comment)
 
 
 # Заработком считаем только то, что гость получил за активность в клубе.
@@ -86,7 +118,6 @@ def total_earned(db: Session, user_id: int) -> int:
         )
     ).scalar_one()
     return int(total)
-
 
 
 def history(db: Session, user_id: int, limit: int = 50) -> list[PtsTransaction]:
