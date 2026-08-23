@@ -2,6 +2,9 @@
 
 Победитель определяется на сервере: клиент получает уже готовый результат
 и ленту для анимации. Иначе выигрыш можно было бы подделать в браузере.
+
+Каждое денежное движение прокрутки привязано к id строки спина: повторный
+запуск той же операции не может начислить приз или вернуть ставку дважды.
 """
 
 import secrets
@@ -91,6 +94,7 @@ def _refund_broken_prize(db: Session, user: User, wheel: Wheel, spin_row: WheelS
         ref_type="wheel",
         ref_id=str(wheel.id),
         comment="Приз настроен неверно, прокрутка возвращена",
+        idem_key=f"wheel_refund:{spin_row.id}",
     )
     spin_row.prize_title = "Приз недоступен, PTS возвращены"
     spin_row.prize_kind = PrizeKind.NOTHING
@@ -110,6 +114,10 @@ def _resolve_one(db: Session, user: User, wheel: Wheel, pool: list[WheelPrize]) 
         prize_rarity=winner.rarity,
         pts_won=0,
     )
+    # Строка спина сохраняется ДО начисления: её id — это ключ идемпотентности
+    # для выигрыша и возврата, без него денежную операцию не отличить от повтора.
+    db.add(spin_row)
+    db.flush()
 
     redemption = None
     if winner.kind == PrizeKind.PTS and winner.pts_amount > 0:
@@ -121,6 +129,7 @@ def _resolve_one(db: Session, user: User, wheel: Wheel, pool: list[WheelPrize]) 
             ref_type="wheel_prize",
             ref_id=str(winner.id),
             comment=f"Выигрыш: {winner.title}",
+            idem_key=f"wheel_prize:{spin_row.id}",
         )
         spin_row.pts_won = winner.pts_amount
 
@@ -152,12 +161,31 @@ def _resolve_one(db: Session, user: User, wheel: Wheel, pool: list[WheelPrize]) 
     }
 
 
-def spin(db: Session, user: User, wheel_id: int, count: int = 1, all_in: bool = False) -> dict:
+def spin(
+    db: Session,
+    user: User,
+    wheel_id: int,
+    count: int = 1,
+    all_in: bool = False,
+    idem_key: str | None = None,
+) -> dict:
+    """Одна пачка прокруток.
+
+    `idem_key` — ключ с клиента (заголовок Idempotency-Key). Мини-апп живёт
+    в мобильной сети, где ответ легко теряется после того, как сервер уже
+    списал PTS. Повтор с тем же ключом не списывает ставку второй раз.
+    """
     wheel = db.get(Wheel, wheel_id)
     if wheel is None or not wheel.is_active:
         raise WheelError("Лента недоступна")
     if wheel.cost_pts <= 0:
         raise WheelError("Лента настроена неверно: стоимость должна быть больше нуля")
+
+    debit_key = f"wheel_spin:{user.id}:{idem_key}" if idem_key else None
+    if debit_key is not None and pts.find_by_key(db, debit_key) is not None:
+        # Ставка по этому ключу уже списана и призы уже выданы. Переигрывать
+        # ленту нельзя: гость получил бы второй приз бесплатно.
+        raise WheelError("Эта прокрутка уже засчитана, обнови экран")
 
     pool = prizes_of(db, wheel.id)
     if not pool:
@@ -190,7 +218,16 @@ def spin(db: Session, user: User, wheel_id: int, count: int = 1, all_in: bool = 
     else:
         comment = f"Прокрутка: {wheel.title}"
     try:
-        pts.debit(db, user, total_cost, reason=TxReason.REWARD_REDEEM, ref_type="wheel", ref_id=str(wheel.id), comment=comment)
+        pts.debit(
+            db,
+            user,
+            total_cost,
+            reason=TxReason.REWARD_REDEEM,
+            ref_type="wheel",
+            ref_id=str(wheel.id),
+            comment=comment,
+            idem_key=debit_key,
+        )
     except pts.InsufficientFunds as exc:
         raise WheelError(f"Не хватает PTS: {exc}") from exc
 

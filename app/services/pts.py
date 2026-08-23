@@ -1,7 +1,24 @@
 """Движение PTS. Любое начисление и списание проходит только через этот модуль,
-чтобы баланс и журнал никогда не разъезжались."""
+чтобы баланс и журнал никогда не разъезжались.
+
+Ключи идемпотентности (`idem_key`)
+---------------------------------
+Повторный запрос к деньгам — это норма, а не авария: телефон теряет сеть
+после отправки, гость жмёт кнопку дважды, регламентный прогон запускается
+дважды после рестарта. Если вызывающий код может построить устойчивый ключ
+операции (id строки прогресса, код награды, id прокрутки) — он передаёт
+его сюда, и повтор возвращает уже созданную транзакцию вместо второго списания.
+
+Гарантию даёт БД, а не проверка в памяти: на `pts_transactions.idem_key` висит
+уникальный индекс, а сама операция идёт внутри SAVEPOINT. Два параллельных
+запроса с одним ключом не смогут оба изменить баланс: проигравший получит
+IntegrityError, откатит SAVEPOINT целиком (вместе с UPDATE баланса) и вернёт чужую
+уже записанную транзакцию.
+Вызовы без ключа работают как раньше — каждый создаёт новую строку.
+"""
 
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import PtsTransaction, TxReason, User
@@ -14,26 +31,29 @@ class InsufficientFunds(Exception):
         self.available = available
 
 
-def _change_balance(
+def find_by_key(db: Session, idem_key: str) -> PtsTransaction | None:
+    """Уже выполненная операция с таким ключом, если она есть."""
+    return db.execute(
+        select(PtsTransaction).where(PtsTransaction.idem_key == idem_key)
+    ).scalar_one_or_none()
+
+
+def _apply(
     db: Session,
     user: User,
     amount: int,
     reason: str,
-    ref_type: str | None = None,
-    ref_id: str | None = None,
-    comment: str | None = None,
+    ref_type: str | None,
+    ref_id: str | None,
+    comment: str | None,
+    idem_key: str | None,
 ) -> PtsTransaction:
-    """Атомарно меняет баланс и добавляет запись в журнал в той же транзакции.
+    """Одно движение баланса вместе со строкой журнала.
 
     Баланс вычисляет база, а не загруженный ORM-объект. Поэтому устаревший
     экземпляр User не может привести к двойному списанию или потерянному
     начислению при конкурентных запросах.
     """
-    if user.id is None:
-        raise ValueError("Пользователь должен быть сохранён до изменения баланса")
-    if amount == 0:
-        raise ValueError("Изменение баланса не может быть нулевым")
-
     stmt = update(User).where(User.id == user.id)
     if amount < 0:
         stmt = stmt.where(User.pts_balance >= -amount)
@@ -63,12 +83,56 @@ def _change_balance(
         ref_type=ref_type,
         ref_id=ref_id,
         comment=comment,
+        idem_key=idem_key,
     )
     db.add(tx)
     db.flush()
+    return tx
 
-    # UPDATE выполнен напрямую. Не присваиваем значение ORM-атрибуту, иначе
-    # следующий flush может записать устаревший баланс поверх результата SQL.
+
+def _change_balance(
+    db: Session,
+    user: User,
+    amount: int,
+    reason: str,
+    ref_type: str | None = None,
+    ref_id: str | None = None,
+    comment: str | None = None,
+    idem_key: str | None = None,
+) -> PtsTransaction:
+    if user.id is None:
+        raise ValueError("Пользователь должен быть сохранён до изменения баланса")
+    if amount == 0:
+        raise ValueError("Изменение баланса не может быть нулевым")
+
+    if idem_key is None:
+        tx = _apply(db, user, amount, reason, ref_type, ref_id, comment, None)
+        # UPDATE выполнен напрямую. Не присваиваем значение ORM-атрибуту, иначе
+        # следующий flush может записать устаревший баланс поверх результата SQL.
+        db.expire(user, ["pts_balance"])
+        return tx
+
+    done = find_by_key(db, idem_key)
+    if done is not None:
+        db.expire(user, ["pts_balance"])
+        return done
+
+    # Всё, что накопилось в сессии до денежной операции, отправляем в базу
+    # заранее: внутри SAVEPOINT должен оказаться только сам перевод,
+    # иначе откат снёс бы чужие изменения.
+    db.flush()
+
+    try:
+        with db.begin_nested():
+            tx = _apply(db, user, amount, reason, ref_type, ref_id, comment, idem_key)
+    except IntegrityError:
+        # Конкурент успел раньше: SAVEPOINT откачен вместе с UPDATE баланса.
+        done = find_by_key(db, idem_key)
+        if done is None:
+            raise
+        db.expire(user, ["pts_balance"])
+        return done
+
     db.expire(user, ["pts_balance"])
     return tx
 
@@ -81,10 +145,11 @@ def credit(
     ref_type: str | None = None,
     ref_id: str | None = None,
     comment: str | None = None,
+    idem_key: str | None = None,
 ) -> PtsTransaction:
     if amount <= 0:
         raise ValueError("credit ждёт положительную ненулевую сумму")
-    return _change_balance(db, user, amount, reason, ref_type, ref_id, comment)
+    return _change_balance(db, user, amount, reason, ref_type, ref_id, comment, idem_key)
 
 
 def debit(
@@ -95,10 +160,11 @@ def debit(
     ref_type: str | None = None,
     ref_id: str | None = None,
     comment: str | None = None,
+    idem_key: str | None = None,
 ) -> PtsTransaction:
     if amount <= 0:
         raise ValueError("debit ждёт положительную ненулевую сумму")
-    return _change_balance(db, user, -amount, reason, ref_type, ref_id, comment)
+    return _change_balance(db, user, -amount, reason, ref_type, ref_id, comment, idem_key)
 
 
 # Заработком считаем только то, что гость получил за активность в клубе.
