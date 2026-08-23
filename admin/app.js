@@ -3,11 +3,19 @@
    хватает, т.к. панель и API на одном домене). */
 
 const state = { clubs: [], usersPage: 1, usersQuery: '' };
+const MOSCOW_TZ = 'Europe/Moscow';
 
 async function api(path, options = {}) {
   const response = await fetch(path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, options));
   const text = await response.text();
-  const data = text ? JSON.parse(text) : null;
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch (e) {
+    const error = new Error('Сервер вернул не JSON');
+    error.status = response.status;
+    throw error;
+  }
   if (!response.ok) {
     const error = new Error((data && data.detail) || 'Ошибка запроса');
     error.status = response.status;
@@ -35,7 +43,10 @@ function toast(message) {
 
 function fmtDate(iso) {
   if (!iso) return '—';
-  return new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' });
+  return new Date(iso).toLocaleString('ru-RU', {
+    day: '2-digit', month: '2-digit', year: '2-digit',
+    hour: '2-digit', minute: '2-digit', timeZone: MOSCOW_TZ,
+  });
 }
 
 function table(headers, rows) {
@@ -47,8 +58,6 @@ function table(headers, rows) {
     </table>
   `;
 }
-
-// --- вход / выход ---
 
 async function checkAuth() {
   try {
@@ -89,8 +98,6 @@ $('#logoutBtn').addEventListener('click', async () => {
   location.reload();
 });
 
-// --- навигация ---
-
 function showView(name) {
   $$('.view').forEach((node) => { node.hidden = node.dataset.view !== name; });
   $$('.nav-item').forEach((node) => node.classList.toggle('active', node.dataset.view === name));
@@ -112,9 +119,9 @@ function showView(name) {
 $$('.nav-item').forEach((node) => node.addEventListener('click', () => showView(node.dataset.view)));
 
 function applyPermissions(me) {
-  // Сервер всё равно проверяет права на каждой ручке; это только чтобы
-  // сотрудник не видел разделов, куда ему всё равно ответят 403.
   const granted = new Set(me.permissions || []);
+  if (granted.has('clubs.edit')) granted.add('clubs.view');
+  if (granted.has('reports.export')) granted.add('reports.view');
   $$('.nav-item').forEach((node) => {
     const needed = node.dataset.perm;
     node.hidden = Boolean(needed) && !granted.has(needed);
@@ -129,8 +136,6 @@ function firstAvailableView() {
 function boot() {
   showView(firstAvailableView());
 }
-
-// --- ОБЗОР ---
 
 async function loadOverview() {
   const data = await api('/api/console/reports');
@@ -151,8 +156,6 @@ async function loadOverview() {
   `);
   $('#overviewClubs').innerHTML = table(['Клуб', 'Сессий', 'Уникальных гостей', 'Часов'], rows);
 }
-
-// --- ПОЛЬЗОВАТЕЛИ ---
 
 async function loadUsers(page = 1) {
   state.usersPage = page;
@@ -285,8 +288,10 @@ async function openUserDetail(telegramId) {
       const comment = $('#ptsComment').value.trim() || 'Ручное начисление (демо)';
       if (!amount) { toast('Сумма не может быть нулевой'); return; }
       try {
-        const params = new URLSearchParams({ amount: String(amount), comment });
-        const result = await api(`/api/console/users/${telegramId}/pts?${params}`, { method: 'POST' });
+        const result = await api(`/api/console/users/${telegramId}/pts`, {
+          method: 'POST',
+          body: JSON.stringify({ amount, comment }),
+        });
         $('#ptsGrantResult').textContent = `Новый баланс: ${result.balance} PTS`;
         toast('Готово');
         openUserDetail(telegramId);
@@ -320,8 +325,6 @@ function statusBadge(status) {
   };
   return map[status] || esc(status);
 }
-
-// --- КОДЫ ---
 
 let lookedUpCode = null;
 
@@ -360,7 +363,7 @@ $('#codeUseBtn').addEventListener('click', async () => {
 });
 
 async function loadCodesTable() {
-  const data = await api('/api/admin/redemptions?status=used&only_new=true');
+  const data = await api('/api/admin/redemptions?status=approved&only_new=true');
   const rows = data.items.map((r) => `
     <tr>
       <td><code>${esc(r.code)}</code></td>
@@ -372,8 +375,6 @@ async function loadCodesTable() {
   $('#codesTable').innerHTML = table(['Код', 'Награда', 'Гость', 'Погашен'], rows);
 }
 
-// --- КЛУБЫ ---
-
 async function loadClubs() {
   const data = await api('/api/console/clubs');
   state.clubs = data.items;
@@ -383,14 +384,14 @@ async function loadClubs() {
       <td>${esc(c.name)}</td>
       <td><code>${esc(c.slug)}</code></td>
       <td>${c.is_active ? '<span class="badge ok">активен</span>' : '<span class="badge bad">выключен</span>'}</td>
-      <td><code>${esc(c.webhook_token)}</code></td>
+      <td>${c.webhook_configured ? '<span class="badge ok">токен задан</span>' : '<span class="badge bad">токен не задан</span>'}</td>
       <td>
         <button class="btn small" data-toggle="${c.id}" data-active="${c.is_active}">${c.is_active ? 'Выключить' : 'Включить'}</button>
         <button class="btn small" data-rotate="${c.id}">Обновить токен</button>
       </td>
     </tr>
   `);
-  $('#clubsTable').innerHTML = table(['Название', 'Slug', 'Статус', 'Токен вебхука', 'Действия'], rows);
+  $('#clubsTable').innerHTML = table(['Название', 'Slug', 'Статус', 'Вебхук', 'Действия'], rows);
 
   $$('#clubsTable [data-toggle]').forEach((btn) => {
     btn.addEventListener('click', async () => {
@@ -426,8 +427,6 @@ $('#clubCreateForm').addEventListener('submit', async (event) => {
   }
 });
 
-// --- ОТЧЁТЫ ---
-
 $('#reportRunBtn').addEventListener('click', async () => {
   const params = new URLSearchParams();
   if ($('#reportFrom').value) params.set('date_from', $('#reportFrom').value);
@@ -460,8 +459,6 @@ $('#reportRunBtn').addEventListener('click', async () => {
     rows
   );
 });
-
-// --- ТЕСТОВЫЕ ЗАПРОСЫ ---
 
 async function loadTestForms() {
   if (!state.clubs.length) {
@@ -510,8 +507,6 @@ $('#testEndForm').addEventListener('submit', async (event) => {
   }
 });
 
-// --- ЖУРНАЛ ---
-
 async function loadLogs() {
   const data = await api('/api/console/logs?page_size=100');
   const rows = data.items.map((l) => `
@@ -525,7 +520,5 @@ async function loadLogs() {
   `);
   $('#logsTable').innerHTML = table(['Когда', 'Админ', 'Действие', 'Объект', 'Детали'], rows);
 }
-
-// --- старт ---
 
 checkAuth();
