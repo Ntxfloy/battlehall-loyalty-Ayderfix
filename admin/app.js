@@ -1,25 +1,49 @@
 /* Панель администратора BATTLEHALL. Без сборки, как и мини-апп: экранов
    немного, состояние плоское. api() всегда шлёт куки (credentials: same-origin
-   хватает, т.к. панель и API на одном домене). */
+   хватает, т.к. панель и API на одном домене).
 
-const state = { clubs: [], usersPage: 1, usersQuery: '' };
+   Главное правило ошибок: потеря связи — это НЕ выход из системы. Раньше
+   любая ошибка в checkAuth() выкидывала на экран входа, и при моргании Wi-Fi
+   админ видел форму логина, хотя сессия была жива. */
+
+const state = { clubs: [], usersPage: 1, usersQuery: '', queuePage: 1 };
 const MOSCOW_TZ = 'Europe/Moscow';
 
+class ApiError extends Error {
+  constructor(message, { status = 0, isNetwork = false, retryAfter = null } = {}) {
+    super(message);
+    this.status = status;
+    this.isNetwork = isNetwork;
+    this.retryAfter = retryAfter;
+  }
+}
+
 async function api(path, options = {}) {
-  const response = await fetch(path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, options));
+  let response;
+  try {
+    response = await fetch(path, Object.assign({
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+    }, options));
+  } catch (e) {
+    // fetch падает только на транспорте: нет сети, сервер не ответил, DNS.
+    throw new ApiError('Нет связи с сервером', { isNetwork: true });
+  }
+
   const text = await response.text();
   let data = null;
   try {
     data = text ? JSON.parse(text) : null;
   } catch (e) {
-    const error = new Error('Сервер вернул не JSON');
-    error.status = response.status;
-    throw error;
+    throw new ApiError('Сервер вернул не JSON', { status: response.status });
   }
+
   if (!response.ok) {
-    const error = new Error((data && data.detail) || 'Ошибка запроса');
-    error.status = response.status;
-    throw error;
+    const retryAfter = Number(response.headers.get('Retry-After')) || null;
+    throw new ApiError((data && data.detail) || 'Ошибка запроса', {
+      status: response.status,
+      retryAfter,
+    });
   }
   return data;
 }
@@ -41,6 +65,52 @@ function toast(message) {
   toast.timer = setTimeout(() => { node.hidden = true; }, 3000);
 }
 
+/* Единое место, где техническая ошибка превращается в человеческую фразу. */
+function describeError(error) {
+  if (!error) return 'Неизвестная ошибка';
+  if (error.isNetwork) return 'Нет связи с сервером — проверьте интернет и повторите';
+  if (error.status >= 500) return 'Сервер ответил ошибкой — попробуйте ещё раз через минуту';
+  if (error.status === 429 && error.retryAfter) {
+    const minutes = Math.max(Math.ceil(error.retryAfter / 60), 1);
+    return `${error.message} (повторите через ${minutes} мин.)`;
+  }
+  return error.message || 'Ошибка запроса';
+}
+
+/* 401 — единственный случай, когда надо вернуть человека на экран входа.
+   Сейчас это стало важнее: смена пароля рвёт чужие сессии на сервере. */
+function handleError(error) {
+  if (error && error.status === 401) { sessionExpired(); return; }
+  toast(describeError(error));
+}
+
+/* Один клик — один запрос. Пока запрос идёт, кнопка выключена: без этого
+   двойной тап по «Погасить» или «Выгрузить» уходит на сервер дважды — на телефоне
+   это происходит постоянно. */
+async function busy(nodes, fn) {
+  const list = (Array.isArray(nodes) ? nodes : [nodes]).filter(Boolean);
+  const previous = list.map((node) => node.disabled);
+  list.forEach((node) => { node.disabled = true; });
+  document.body.classList.add('is-busy');
+  try {
+    return await fn();
+  } finally {
+    document.body.classList.remove('is-busy');
+    list.forEach((node, index) => { node.disabled = previous[index]; });
+  }
+}
+
+/* Загрузчики разделов асинхронные, и без этой обёртки ошибка внутри них
+   улетала в консоль, а экран просто оставался пустым. */
+async function guard(fn) {
+  try {
+    return await fn();
+  } catch (error) {
+    handleError(error);
+    return null;
+  }
+}
+
 function fmtDate(iso) {
   if (!iso) return '—';
   return new Date(iso).toLocaleString('ru-RU', {
@@ -59,61 +129,112 @@ function table(headers, rows) {
   `;
 }
 
+function pager(page, totalPages, total) {
+  return `
+    <button class="btn small" ${page <= 1 ? 'disabled' : ''} data-page="${page - 1}">← Назад</button>
+    <span>${page} / ${totalPages}${total == null ? '' : ` (${total} всего)`}</span>
+    <button class="btn small" ${page >= totalPages ? 'disabled' : ''} data-page="${page + 1}">Вперёд →</button>
+  `;
+}
+
+// --- вход и сессия ---
+
+let authRetryTimer = null;
+
+function showLogin(message) {
+  $('#loginScreen').hidden = false;
+  $('#app').hidden = true;
+  const errorBox = $('#loginError');
+  if (message) {
+    errorBox.textContent = message;
+    errorBox.hidden = false;
+  } else {
+    errorBox.hidden = true;
+  }
+}
+
+function sessionExpired() {
+  state.me = null;
+  showLogin('Сессия завершена — войдите заново.');
+}
+
 async function checkAuth() {
+  clearTimeout(authRetryTimer);
   try {
     const me = await api('/api/console/auth/me');
     state.me = me;
     $('#whoami').textContent = me.display_name || me.username;
     applyPermissions(me);
+    $('#loginError').hidden = true;
     $('#loginScreen').hidden = true;
     $('#app').hidden = false;
     boot();
   } catch (error) {
-    $('#loginScreen').hidden = false;
-    $('#app').hidden = true;
+    if (error.status === 401) {
+      // Действительно не авторизован: первый визит, логаут или отозванная кука.
+      showLogin();
+      return;
+    }
+    // Сеть или 5xx: сессия, скорее всего, жива — говорим правду и пробуем снова.
+    showLogin(`${describeError(error)}. Повторяем попытку…`);
+    authRetryTimer = setTimeout(checkAuth, 5000);
   }
 }
 
 $('#loginForm').addEventListener('submit', async (event) => {
   event.preventDefault();
   const errorBox = $('#loginError');
+  const submitBtn = $('#loginForm button[type="submit"]');
   errorBox.hidden = true;
+  clearTimeout(authRetryTimer);
   try {
-    await api('/api/console/auth/login', {
+    await busy(submitBtn, () => api('/api/console/auth/login', {
       method: 'POST',
       body: JSON.stringify({
         username: $('#loginUsername').value.trim(),
         password: $('#loginPassword').value,
       }),
-    });
+    }));
+    $('#loginPassword').value = '';
     checkAuth();
   } catch (error) {
-    errorBox.textContent = error.message;
+    errorBox.textContent = describeError(error);
     errorBox.hidden = false;
   }
 });
 
-$('#logoutBtn').addEventListener('click', async () => {
-  await api('/api/console/auth/logout', { method: 'POST' });
+$('#logoutBtn').addEventListener('click', async (event) => {
+  try {
+    await busy(event.currentTarget, () => api('/api/console/auth/logout', { method: 'POST' }));
+  } catch (error) {
+    // Выйти надо в любом случае: кука либо уже мёртвая, либо сервер недоступен.
+  }
   location.reload();
 });
+
+// --- навигация ---
+
+const VIEW_LOADERS = {
+  overview: () => loadOverview(),
+  users: () => loadUsers(),
+  codes: () => loadCodesTable(),
+  clubs: () => loadClubs(),
+  logs: () => loadLogs(),
+  queue: () => loadQueue(1),
+  achievements: () => loadAchievementsAdmin(),
+  rewards: () => loadRewardsAdmin(),
+  loot: () => loadLootAdmin(),
+  admins: () => loadAdmins(),
+  oasys: () => loadOasysMap(),
+  test: () => loadTestForms(),
+};
 
 function showView(name) {
   $$('.view').forEach((node) => { node.hidden = node.dataset.view !== name; });
   $$('.nav-item').forEach((node) => node.classList.toggle('active', node.dataset.view === name));
 
-  if (name === 'overview') loadOverview();
-  if (name === 'users') loadUsers();
-  if (name === 'codes') loadCodesTable();
-  if (name === 'clubs') loadClubs();
-  if (name === 'logs') loadLogs();
-  if (name === 'queue') loadQueue();
-  if (name === 'achievements') loadAchievementsAdmin();
-  if (name === 'rewards') loadRewardsAdmin();
-  if (name === 'loot') loadLootAdmin();
-  if (name === 'admins') loadAdmins();
-  if (name === 'oasys') loadOasysMap();
-  if (name === 'test') loadTestForms();
+  const loader = VIEW_LOADERS[name];
+  if (loader) guard(loader);
 }
 
 $$('.nav-item').forEach((node) => node.addEventListener('click', () => showView(node.dataset.view)));
@@ -176,24 +297,19 @@ async function loadUsers(page = 1) {
   $('#usersTable').innerHTML = table(['Telegram ID', 'Имя', 'Телефон', 'Баланс', 'Группа', 'Регистрация'], rows);
 
   $$('#usersTable tr.clickable').forEach((row) => {
-    row.addEventListener('click', () => openUserDetail(Number(row.dataset.tg)));
+    row.addEventListener('click', () => guard(() => openUserDetail(Number(row.dataset.tg))));
   });
 
   const totalPages = Math.max(Math.ceil(data.total / data.page_size), 1);
-  $('#usersPager').innerHTML = `
-    <button class="btn small" ${page <= 1 ? 'disabled' : ''} id="pagerPrev">← Назад</button>
-    <span>${page} / ${totalPages} (${data.total} всего)</span>
-    <button class="btn small" ${page >= totalPages ? 'disabled' : ''} id="pagerNext">Вперёд →</button>
-  `;
-  const prev = $('#pagerPrev');
-  const next = $('#pagerNext');
-  if (prev) prev.addEventListener('click', () => loadUsers(page - 1));
-  if (next) next.addEventListener('click', () => loadUsers(page + 1));
+  $('#usersPager').innerHTML = pager(page, totalPages, data.total);
+  $$('#usersPager [data-page]').forEach((btn) => {
+    btn.addEventListener('click', () => guard(() => loadUsers(Number(btn.dataset.page))));
+  });
 }
 
 $('#userSearchBtn').addEventListener('click', () => {
   state.usersQuery = $('#userSearch').value.trim();
-  loadUsers(1);
+  guard(() => loadUsers(1));
 });
 $('#userSearch').addEventListener('keydown', (event) => {
   if (event.key === 'Enter') $('#userSearchBtn').click();
@@ -287,17 +403,22 @@ async function openUserDetail(telegramId) {
       const amount = Number($('#ptsAmount').value);
       const comment = $('#ptsComment').value.trim() || 'Ручное начисление (демо)';
       if (!amount) { toast('Сумма не может быть нулевой'); return; }
+      // Ручные деньги — необратимая операция, спрашиваем подтверждение.
+      const verb = amount > 0 ? 'Начислить' : 'Списать';
+      if (!confirm(`${verb} ${Math.abs(amount)} PTS гостю ${telegramId}?`)) return;
+      const submitBtn = $('#ptsGrantForm button[type="submit"]');
       try {
-        const result = await api(`/api/console/users/${telegramId}/pts`, {
+        const result = await busy(submitBtn, () => api(`/api/console/users/${telegramId}/pts`, {
           method: 'POST',
           body: JSON.stringify({ amount, comment }),
-        });
+        }));
         $('#ptsGrantResult').textContent = `Новый баланс: ${result.balance} PTS`;
         toast('Готово');
-        openUserDetail(telegramId);
-        loadUsers(state.usersPage);
+        guard(() => openUserDetail(telegramId));
+        guard(() => loadUsers(state.usersPage));
       } catch (error) {
-        $('#ptsGrantResult').textContent = error.message;
+        $('#ptsGrantResult').textContent = describeError(error);
+        if (error.status === 401) sessionExpired();
       }
     });
   }
@@ -328,11 +449,11 @@ function statusBadge(status) {
 
 let lookedUpCode = null;
 
-$('#codeLookupBtn').addEventListener('click', async () => {
+async function lookupCode() {
   const code = $('#codeInput').value.trim();
   if (!code) return;
   try {
-    const data = await api(`/api/admin/redemptions/${encodeURIComponent(code)}`);
+    const data = await busy([$('#codeLookupBtn')], () => api(`/api/admin/redemptions/${encodeURIComponent(code)}`));
     lookedUpCode = data;
     $('#codeResult').innerHTML = `
       <div class="kv-row"><span class="muted">Награда</span><span>${esc(data.reward)}</span></div>
@@ -342,23 +463,32 @@ $('#codeLookupBtn').addEventListener('click', async () => {
     `;
     $('#codeUseBtn').disabled = data.status !== 'pending';
   } catch (error) {
-    $('#codeResult').innerHTML = `<div class="empty">${esc(error.message)}</div>`;
+    lookedUpCode = null;
+    $('#codeResult').innerHTML = `<div class="empty">${esc(describeError(error))}</div>`;
     $('#codeUseBtn').disabled = true;
+    if (error.status === 401) sessionExpired();
   }
+}
+
+$('#codeLookupBtn').addEventListener('click', lookupCode);
+$('#codeInput').addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') lookupCode();
 });
 
-$('#codeUseBtn').addEventListener('click', async () => {
+$('#codeUseBtn').addEventListener('click', async (event) => {
   if (!lookedUpCode) return;
+  // Погашение откатить нельзя, поэтому спрашиваем явно.
+  if (!confirm(`Погасить код ${lookedUpCode.code} (${lookedUpCode.reward})?`)) return;
   try {
-    await api('/api/admin/redemptions/use', {
+    await busy(event.currentTarget, () => api('/api/admin/redemptions/use', {
       method: 'POST',
       body: JSON.stringify({ code: lookedUpCode.code }),
-    });
+    }));
     toast('Код погашен');
-    $('#codeLookupBtn').click();
-    loadCodesTable();
+    await lookupCode();
+    guard(() => loadCodesTable());
   } catch (error) {
-    toast(error.message);
+    handleError(error);
   }
 });
 
@@ -395,44 +525,62 @@ async function loadClubs() {
 
   $$('#clubsTable [data-toggle]').forEach((btn) => {
     btn.addEventListener('click', async () => {
-      await api(`/api/console/clubs/${btn.dataset.toggle}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ is_active: btn.dataset.active !== 'true' }),
-      });
-      loadClubs();
+      const turningOff = btn.dataset.active === 'true';
+      if (turningOff && !confirm('Выключенный клуб перестанет принимать вебхуки OASys. Продолжить?')) return;
+      try {
+        await busy(btn, () => api(`/api/console/clubs/${btn.dataset.toggle}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ is_active: !turningOff }),
+        }));
+        guard(() => loadClubs());
+      } catch (error) {
+        handleError(error);
+      }
     });
   });
   $$('#clubsTable [data-rotate]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       if (!confirm('Старый токен перестанет работать. Продолжить?')) return;
-      await api(`/api/console/clubs/${btn.dataset.rotate}/rotate-token`, { method: 'POST' });
-      toast('Токен обновлён');
-      loadClubs();
+      try {
+        await busy(btn, () => api(`/api/console/clubs/${btn.dataset.rotate}/rotate-token`, { method: 'POST' }));
+        toast('Токен обновлён');
+        guard(() => loadClubs());
+      } catch (error) {
+        handleError(error);
+      }
     });
   });
 }
 
 $('#clubCreateForm').addEventListener('submit', async (event) => {
   event.preventDefault();
+  const submitBtn = event.target.querySelector('button[type="submit"]');
   try {
-    await api('/api/console/clubs', {
+    await busy(submitBtn, () => api('/api/console/clubs', {
       method: 'POST',
       body: JSON.stringify({ slug: $('#clubSlug').value.trim(), name: $('#clubName').value.trim() }),
-    });
+    }));
     $('#clubCreateForm').reset();
-    loadClubs();
+    guard(() => loadClubs());
     toast('Клуб создан');
   } catch (error) {
-    toast(error.message);
+    handleError(error);
   }
 });
 
-$('#reportRunBtn').addEventListener('click', async () => {
+$('#reportRunBtn').addEventListener('click', async (event) => {
   const params = new URLSearchParams();
   if ($('#reportFrom').value) params.set('date_from', $('#reportFrom').value);
   if ($('#reportTo').value) params.set('date_to', $('#reportTo').value);
 
-  const data = await api(`/api/console/reports?${params}`);
+  let data;
+  try {
+    data = await busy(event.currentTarget, () => api(`/api/console/reports?${params}`));
+  } catch (error) {
+    handleError(error);
+    return;
+  }
+
   $('#reportTotals').innerHTML = `
     <div class="stat-tile"><b>${data.total_sessions}</b><span>сессий</span></div>
     <div class="stat-tile"><b>${data.total_hours}</b><span>часов</span></div>
@@ -472,27 +620,30 @@ async function loadTestForms() {
 
 $('#testStartForm').addEventListener('submit', async (event) => {
   event.preventDefault();
+  const submitBtn = event.target.querySelector('button[type="submit"]');
   try {
-    const data = await api('/api/console/test/session-start', {
+    const data = await busy(submitBtn, () => api('/api/console/test/session-start', {
       method: 'POST',
       body: JSON.stringify({
         club_slug: $('#testStartClub').value,
         telegram_id: Number($('#testStartTelegramId').value),
         pc_number: Number($('#testStartPc').value),
       }),
-    });
+    }));
     $('#testStartResult').innerHTML = `<pre>${esc(JSON.stringify(data, null, 2))}</pre>`;
     $('#testEndSessionId').value = data.session_id;
   } catch (error) {
-    $('#testStartResult').innerHTML = `<div class="empty">${esc(error.message)}</div>`;
+    $('#testStartResult').innerHTML = `<div class="empty">${esc(describeError(error))}</div>`;
+    if (error.status === 401) sessionExpired();
   }
 });
 
 $('#testEndForm').addEventListener('submit', async (event) => {
   event.preventDefault();
+  const submitBtn = event.target.querySelector('button[type="submit"]');
   try {
     const minutes = $('#testEndMinutes').value ? Number($('#testEndMinutes').value) : undefined;
-    const data = await api('/api/console/test/session-end', {
+    const data = await busy(submitBtn, () => api('/api/console/test/session-end', {
       method: 'POST',
       body: JSON.stringify({
         club_slug: $('#testEndClub').value,
@@ -500,10 +651,11 @@ $('#testEndForm').addEventListener('submit', async (event) => {
         session_id: $('#testEndSessionId').value.trim(),
         duration_minutes: minutes,
       }),
-    });
+    }));
     $('#testEndResult').innerHTML = `<pre>${esc(JSON.stringify(data, null, 2))}</pre>`;
   } catch (error) {
-    $('#testEndResult').innerHTML = `<div class="empty">${esc(error.message)}</div>`;
+    $('#testEndResult').innerHTML = `<div class="empty">${esc(describeError(error))}</div>`;
+    if (error.status === 401) sessionExpired();
   }
 });
 
@@ -520,5 +672,14 @@ async function loadLogs() {
   `);
   $('#logsTable').innerHTML = table(['Когда', 'Админ', 'Действие', 'Объект', 'Детали'], rows);
 }
+
+// Последний рубеж: любая непойманная ошибка запроса всё равно показывается человеку.
+window.addEventListener('unhandledrejection', (event) => {
+  const error = event.reason;
+  if (error instanceof ApiError) {
+    event.preventDefault();
+    handleError(error);
+  }
+});
 
 checkAuth();

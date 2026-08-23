@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>BATTLEHALL — админка</title>
-  <link rel="stylesheet" href="/static/brand/brand.css?v=8">
-  <link rel="stylesheet" href="/admin/styles.css?v=8">
+  <link rel="stylesheet" href="/static/brand/brand.css?v=9">
+  <link rel="stylesheet" href="/admin/styles.css?v=9">
 </head>
 <body>
   <!-- экран входа -->
@@ -42,6 +42,7 @@
       </nav>
       <div class="sidebar-footer">
         <div id="whoami" class="whoami"></div>
+        <button id="selfPasswordBtn" class="btn ghost block">Сменить пароль</button>
         <button id="logoutBtn" class="btn ghost block">Выйти</button>
       </div>
     </aside>
@@ -190,6 +191,7 @@
         <h1>Ждут подтверждения</h1>
         <p class="muted small">Коды, внесённые на стойке. В таблицу компенсаций попадают только подтверждённые.</p>
         <div id="queueTable" class="table-wrap"></div>
+        <div id="queuePager" class="pager"></div>
 
         <div class="panel" style="margin-top:22px">
           <h2>Google Sheets</h2>
@@ -253,7 +255,7 @@
             <div class="inline-form" style="margin-bottom:12px">
               <input id="adUsername" placeholder="Логин" required>
               <input id="adDisplay" placeholder="Имя">
-              <input id="adPassword" type="password" placeholder="Пароль (от 8 символов)" required>
+              <input id="adPassword" type="password" placeholder="Пароль (от 8 символов)" minlength="8" required>
               <button class="btn primary" type="submit">Создать</button>
             </div>
             <div id="adPermissions" class="perm-grid"></div>
@@ -279,8 +281,17 @@
     <div id="permEditorBody" class="drawer-body"></div>
   </div>
 
+  <div id="passwordEditorBackdrop" class="drawer-backdrop" hidden></div>
+  <div id="passwordEditor" class="drawer" hidden>
+    <div class="drawer-head">
+      <h2 id="passwordEditorTitle"></h2>
+      <button class="btn ghost" id="passwordEditorClose">Закрыть</button>
+    </div>
+    <div id="passwordEditorBody" class="drawer-body"></div>
+  </div>
+
   <div id="toast" class="toast" hidden></div>
-  <script src="/admin/app.js?v=8"></script>
-  <script src="/admin/sections.js?v=8"></script>
+  <script src="/admin/app.js?v=9"></script>
+  <script src="/admin/sections.js?v=9"></script>
 </body>
 </html>

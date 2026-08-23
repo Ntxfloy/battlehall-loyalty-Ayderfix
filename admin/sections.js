@@ -1,7 +1,9 @@
 /* Разделы админки, появившиеся вместе с ролями и ЛУДЛЕНТой.
-   Отдельный файл, чтобы app.js не разрастался: помощники ($, api, table,
-   toast, state) объявлены там и доступны здесь — оба скрипта обычные,
-   в одной глобальной области, и этот подключается после app.js. */
+   Отдельный файл, чтобы app.js не разрастался: помощники ($, api, table, toast,
+   busy, guard, handleError, describeError, state) объявлены там и доступны здесь —
+   оба скрипта обычные, в одной глобальной области, и этот подключается после app.js. */
+
+const QUEUE_PAGE_SIZE = 25;
 
 // --- СТОЙКА ---
 
@@ -10,7 +12,7 @@ async function deskSearch() {
   if (q.length < 2) { toast('Введите минимум 2 символа'); return; }
 
   try {
-    const data = await api(`/api/console/desk/search?q=${encodeURIComponent(q)}`);
+    const data = await busy($('#deskSearchBtn'), () => api(`/api/console/desk/search?q=${encodeURIComponent(q)}`));
     if (!data.items.length) {
       $('#deskResults').innerHTML = '<div class="empty">Ничего не найдено</div>';
       return;
@@ -29,30 +31,40 @@ async function deskSearch() {
 
     $$('#deskResults [data-desk-submit]').forEach((btn) => {
       btn.addEventListener('click', async () => {
-        btn.disabled = true;
+        const code = btn.dataset.deskSubmit;
+        if (!confirm(`Внести код ${code} на подтверждение?`)) return;
         try {
-          await api('/api/console/desk/submit', {
+          await busy(btn, () => api('/api/console/desk/submit', {
             method: 'POST',
-            body: JSON.stringify({ code: btn.dataset.deskSubmit }),
-          });
+            body: JSON.stringify({ code }),
+          }));
           toast('Код внесён, ждёт подтверждения');
-          deskSearch();
+          guard(() => deskSearch());
         } catch (error) {
-          toast(error.message);
-          btn.disabled = false;
+          handleError(error);
         }
       });
     });
   } catch (error) {
-    $('#deskResults').innerHTML = `<div class="empty">${esc(error.message)}</div>`;
+    $('#deskResults').innerHTML = `<div class="empty">${esc(describeError(error))}</div>`;
+    if (error.status === 401) sessionExpired();
   }
 }
 
 // --- ОЧЕРЕДЬ ПОДТВЕРЖДЕНИЯ ---
 
-async function loadQueue() {
+/* Очередь раньше рисовалась целиком: при сотне неподтверждённых кодов это долгая
+   таблица, которую на телефоне невозможно пролистать. Порционируем на клиенте:
+   эндпоинт отдаёт весь список сразу, менять контракт API ради этого не надо. */
+async function loadQueue(page) {
   const data = await api('/api/console/desk/queue');
-  const rows = data.items.map((r) => `
+  const items = data.items || [];
+  const totalPages = Math.max(Math.ceil(items.length / QUEUE_PAGE_SIZE), 1);
+  const current = Math.min(Math.max(page || state.queuePage || 1, 1), totalPages);
+  state.queuePage = current;
+
+  const slice = items.slice((current - 1) * QUEUE_PAGE_SIZE, current * QUEUE_PAGE_SIZE);
+  const rows = slice.map((r) => `
     <tr>
       <td><code>${esc(r.code)}</code></td>
       <td>${esc(r.guest.username ? '@' + r.guest.username : (r.guest.phone || r.guest.telegram_id))}</td>
@@ -70,28 +82,37 @@ async function loadQueue() {
     ['Код', 'Гость', 'Награда', 'Номинал', 'Внёс', 'Когда', ''], rows
   );
 
-  const bind = (attr, path, message) => {
+  const pagerBox = $('#queuePager');
+  if (pagerBox) {
+    pagerBox.innerHTML = items.length > QUEUE_PAGE_SIZE ? pager(current, totalPages, items.length) : '';
+    $$('#queuePager [data-page]').forEach((btn) => {
+      btn.addEventListener('click', () => guard(() => loadQueue(Number(btn.dataset.page))));
+    });
+  }
+
+  const bind = (attr, path, message, needsConfirm) => {
     $$(`#queueTable [${attr}]`).forEach((btn) => {
       btn.addEventListener('click', async () => {
-        btn.disabled = true;
+        const code = btn.getAttribute(attr);
+        if (needsConfirm && !confirm(needsConfirm(code))) return;
         try {
-          await api(path, {
+          await busy(btn, () => api(path, {
             method: 'POST',
-            body: JSON.stringify({ code: btn.getAttribute(attr) }),
-          });
+            body: JSON.stringify({ code }),
+          }));
           toast(message);
-          loadQueue();
+          guard(() => loadQueue(state.queuePage));
         } catch (error) {
-          toast(error.message);
-          btn.disabled = false;
+          handleError(error);
         }
       });
     });
   };
-  bind('data-approve', '/api/console/desk/approve', 'Подтверждено');
-  bind('data-reject', '/api/console/desk/reject', 'Отклонено');
+  // Подтверждение и отклонение оба необратимы — спрашиваем подтверждение.
+  bind('data-approve', '/api/console/desk/approve', 'Подтверждено', (code) => `Подтвердить код ${code}? Он попадёт в выгрузку компенсаций.`);
+  bind('data-reject', '/api/console/desk/reject', 'Отклонено', (code) => `Отклонить код ${code}? Действие нельзя отменить.`);
 
-  loadSheetsStatus();
+  guard(() => loadSheetsStatus());
 }
 
 // --- Google Sheets ---
@@ -103,29 +124,33 @@ async function loadSheetsStatus() {
       ? `Подключено. Лист «${esc(s.worksheet)}», автовыгрузка ${s.autoexport ? 'включена' : 'выключена'}. Ждёт выгрузки: <b>${s.pending}</b>`
       : `Не настроено — выгрузка отдаёт JSON для ручного переноса. Ждёт выгрузки: <b>${s.pending}</b>`;
   } catch (error) {
-    $('#sheetsStatus').textContent = error.message;
+    $('#sheetsStatus').textContent = describeError(error);
+    if (error.status === 401) sessionExpired();
   }
 }
 
-$('#sheetsCheckBtn').addEventListener('click', async () => {
+$('#sheetsCheckBtn').addEventListener('click', async (event) => {
   $('#sheetsResult').innerHTML = '<div class="small muted">Проверяем доступ…</div>';
   try {
-    const r = await api('/api/console/sheets/check', { method: 'POST' });
+    const r = await busy(event.currentTarget, () => api('/api/console/sheets/check', { method: 'POST' }));
     $('#sheetsResult').innerHTML = `<pre>Таблица: ${esc(r.spreadsheet)}
 Лист: ${esc(r.worksheet)}
 Строк: ${r.rows}</pre>`;
   } catch (error) {
-    $('#sheetsResult').innerHTML = `<div class="empty">${esc(error.message)}</div>`;
+    $('#sheetsResult').innerHTML = `<div class="empty">${esc(describeError(error))}</div>`;
+    if (error.status === 401) sessionExpired();
   }
 });
 
-$('#sheetsExportBtn').addEventListener('click', async () => {
+$('#sheetsExportBtn').addEventListener('click', async (event) => {
+  // Выгрузка помечает коды как выгруженные, повторно их уже не отдать.
+  if (!confirm('Выгрузить подтверждённые коды в таблицу? Они пометятся как выгруженные.')) return;
   try {
-    const r = await api('/api/console/sheets/export', { method: 'POST' });
+    const r = await busy(event.currentTarget, () => api('/api/console/sheets/export', { method: 'POST' }));
     toast(r.exported ? `Выгружено строк: ${r.exported}` : 'Нечего выгружать');
-    loadSheetsStatus();
+    guard(() => loadSheetsStatus());
   } catch (error) {
-    toast(error.message);
+    handleError(error);
   }
 });
 
@@ -165,17 +190,15 @@ async function loadAchievementsAdmin() {
   $$('#achTable [data-ach-save]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const id = btn.dataset.achSave;
-      btn.disabled = true;
       try {
-        await api(`/api/console/achievements/${id}`, {
+        await busy(btn, () => api(`/api/console/achievements/${id}`, {
           method: 'PATCH',
           body: JSON.stringify(collectRow('#achTable', 'data-ach', id)),
-        });
+        }));
         toast('Сохранено');
       } catch (error) {
-        toast(error.message);
+        handleError(error);
       }
-      btn.disabled = false;
     });
   });
 }
@@ -200,17 +223,15 @@ async function loadRewardsAdmin() {
   $$('#rewardsTable [data-rw-save]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const id = btn.dataset.rwSave;
-      btn.disabled = true;
       try {
-        await api(`/api/console/rewards/${id}`, {
+        await busy(btn, () => api(`/api/console/rewards/${id}`, {
           method: 'PATCH',
           body: JSON.stringify(collectRow('#rewardsTable', 'data-rw', id)),
-        });
+        }));
         toast('Сохранено');
       } catch (error) {
-        toast(error.message);
+        handleError(error);
       }
-      btn.disabled = false;
     });
   });
 }
@@ -279,17 +300,15 @@ async function loadLootAdmin() {
   $$('#wheelsList [data-prize-save]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const id = btn.dataset.prizeSave;
-      btn.disabled = true;
       try {
-        await api(`/api/console/prizes/${id}`, {
+        await busy(btn, () => api(`/api/console/prizes/${id}`, {
           method: 'PATCH',
           body: JSON.stringify(collectRow('#wheelsList', 'data-prize', id)),
-        });
+        }));
         toast('Сохранено');
-        loadLootAdmin();
+        guard(() => loadLootAdmin());
       } catch (error) {
-        toast(error.message);
-        btn.disabled = false;
+        handleError(error);
       }
     });
   });
@@ -298,8 +317,9 @@ async function loadLootAdmin() {
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
       const fd = new FormData(form);
+      const submitBtn = form.querySelector('button[type="submit"]');
       try {
-        await api(`/api/console/wheels/${form.dataset.addPrize}/prizes`, {
+        await busy(submitBtn, () => api(`/api/console/wheels/${form.dataset.addPrize}/prizes`, {
           method: 'POST',
           body: JSON.stringify({
             title: fd.get('title'),
@@ -309,11 +329,11 @@ async function loadLootAdmin() {
             reward_id: fd.get('reward_id') ? Number(fd.get('reward_id')) : null,
             weight: Number(fd.get('weight') || 1),
           }),
-        });
+        }));
         toast('Приз добавлен');
-        loadLootAdmin();
+        guard(() => loadLootAdmin());
       } catch (error) {
-        toast(error.message);
+        handleError(error);
       }
     });
   });
@@ -330,6 +350,86 @@ function closePermissionEditor() {
   $('#permEditor').hidden = true;
   $('#permEditorBackdrop').hidden = true;
 }
+
+/* Форма смены пароля. Раньше здесь был prompt(): пароль виден на экране, нет
+   проверки длины, нет повтора, а в Telegram-браузере и на части мобильных оболочек
+   prompt() вообще может быть заблокирован. */
+function closePasswordEditor() {
+  $('#passwordEditor').hidden = true;
+  $('#passwordEditorBackdrop').hidden = true;
+  $('#passwordEditorBody').innerHTML = '';
+}
+
+function openPasswordEditor(options) {
+  const self = options.mode === 'self';
+  $('#passwordEditorTitle').textContent = self
+    ? 'Смена своего пароля'
+    : `Новый пароль: ${options.username}`;
+
+  $('#passwordEditorBody').innerHTML = `
+    <form id="passwordForm" style="display:grid;gap:14px">
+      ${self ? `
+        <label style="display:block">Текущий пароль
+          <input id="pwCurrent" type="password" autocomplete="current-password" required>
+        </label>` : ''}
+      <label style="display:block">Новый пароль (от 8 символов)
+        <input id="pwNew" type="password" minlength="8" autocomplete="new-password" required>
+      </label>
+      <label style="display:block">Повторите пароль
+        <input id="pwRepeat" type="password" minlength="8" autocomplete="new-password" required>
+      </label>
+      <div class="small muted">${self
+        ? 'После смены все остальные сессии этой учётки завершатся, текущая вкладка останется активной.'
+        : 'Сотрудник будет разлогинен во всех браузерах сразу после сохранения.'}</div>
+      <div id="pwError" class="login-error" hidden></div>
+      <button class="btn primary block" type="submit">Сохранить пароль</button>
+    </form>
+  `;
+  $('#passwordEditor').hidden = false;
+  $('#passwordEditorBackdrop').hidden = false;
+
+  const showError = (message) => {
+    const box = $('#pwError');
+    box.textContent = message;
+    box.hidden = false;
+  };
+
+  $('#passwordForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    $('#pwError').hidden = true;
+
+    const password = $('#pwNew').value;
+    if (password.length < 8) { showError('Пароль короче 8 символов'); return; }
+    if (password !== $('#pwRepeat').value) { showError('Пароли не совпадают'); return; }
+
+    const submitBtn = $('#passwordForm button[type="submit"]');
+    try {
+      if (self) {
+        await busy(submitBtn, () => api('/api/console/auth/password', {
+          method: 'POST',
+          body: JSON.stringify({
+            current_password: $('#pwCurrent').value,
+            new_password: password,
+          }),
+        }));
+      } else {
+        await busy(submitBtn, () => api(`/api/console/admins/${options.adminId}/password`, {
+          method: 'POST',
+          body: JSON.stringify({ password }),
+        }));
+      }
+      closePasswordEditor();
+      toast('Пароль обновлён');
+    } catch (error) {
+      // 401 здесь означает неверный текущий пароль, а не протухшую сессию.
+      showError(describeError(error));
+    }
+  });
+}
+
+$('#passwordEditorClose').addEventListener('click', closePasswordEditor);
+$('#passwordEditorBackdrop').addEventListener('click', closePasswordEditor);
+$('#selfPasswordBtn').addEventListener('click', () => openPasswordEditor({ mode: 'self' }));
 
 async function loadAdmins() {
   const data = await api('/api/console/admins');
@@ -354,8 +454,8 @@ async function loadAdmins() {
       <td>${a.last_login_at ? fmtDate(a.last_login_at) : '—'}</td>
       <td>${a.role === 'owner' ? '' : `
         <button class="btn small" data-admin-edit="${a.id}">Права</button>
-        <button class="btn small" data-admin-pass="${a.id}">Пароль</button>
-        <button class="btn small danger" data-admin-del="${a.id}">Удалить</button>
+        <button class="btn small" data-admin-pass="${a.id}" data-admin-name="${esc(a.username)}">Пароль</button>
+        <button class="btn small danger" data-admin-del="${a.id}" data-admin-name="${esc(a.username)}">Удалить</button>
       `}</td>
     </tr>
   `);
@@ -370,30 +470,24 @@ async function loadAdmins() {
   });
 
   $$('#adminsTable [data-admin-pass]').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const password = prompt('Новый пароль (от 8 символов):');
-      if (!password) return;
-      try {
-        await api(`/api/console/admins/${btn.dataset.adminPass}/password`, {
-          method: 'POST',
-          body: JSON.stringify({ password }),
-        });
-        toast('Пароль обновлён');
-      } catch (error) {
-        toast(error.message);
-      }
+    btn.addEventListener('click', () => {
+      openPasswordEditor({
+        mode: 'admin',
+        adminId: btn.dataset.adminPass,
+        username: btn.dataset.adminName,
+      });
     });
   });
 
   $$('#adminsTable [data-admin-del]').forEach((btn) => {
     btn.addEventListener('click', async () => {
-      if (!confirm('Удалить учётку?')) return;
+      if (!confirm(`Удалить учётку ${btn.dataset.adminName}? Сессии этого сотрудника отключатся сразу.`)) return;
       try {
-        await api(`/api/console/admins/${btn.dataset.adminDel}`, { method: 'DELETE' });
+        await busy(btn, () => api(`/api/console/admins/${btn.dataset.adminDel}`, { method: 'DELETE' }));
         toast('Учётка удалена');
-        loadAdmins();
+        guard(() => loadAdmins());
       } catch (error) {
-        toast(error.message);
+        handleError(error);
       }
     });
   });
@@ -419,18 +513,18 @@ function openPermissionEditor(admin) {
   $('#permEditor').hidden = false;
   $('#permEditorBackdrop').hidden = false;
 
-  $('#permSave').addEventListener('click', async () => {
+  $('#permSave').addEventListener('click', async (event) => {
     const permissions = $$('#permEditorBody input[type="checkbox"]:checked').map((i) => i.value);
     try {
-      await api(`/api/console/admins/${admin.id}`, {
+      await busy(event.currentTarget, () => api(`/api/console/admins/${admin.id}`, {
         method: 'PATCH',
         body: JSON.stringify({ permissions }),
-      });
+      }));
       toast('Права сохранены');
       closePermissionEditor();
-      loadAdmins();
+      guard(() => loadAdmins());
     } catch (error) {
-      toast(error.message);
+      handleError(error);
     }
   });
 }
@@ -443,8 +537,9 @@ $('#permEditorBackdrop').addEventListener('click', closePermissionEditor);
 $('#rewardCreateForm').addEventListener('submit', async (event) => {
   event.preventDefault();
   const unit = $('#rwUnit').value;
+  const submitBtn = event.target.querySelector('button[type="submit"]');
   try {
-    await api('/api/console/rewards', {
+    await busy(submitBtn, () => api('/api/console/rewards', {
       method: 'POST',
       body: JSON.stringify({
         code: $('#rwCode').value.trim(),
@@ -454,39 +549,42 @@ $('#rewardCreateForm').addEventListener('submit', async (event) => {
         payout_unit: unit,
         kind: unit === 'RUB' ? 'cash' : 'premium',
       }),
-    });
+    }));
     event.target.reset();
     toast('Награда создана');
-    loadRewardsAdmin();
+    guard(() => loadRewardsAdmin());
   } catch (error) {
-    toast(error.message);
+    handleError(error);
   }
 });
 
 $('#wheelCreateForm').addEventListener('submit', async (event) => {
   event.preventDefault();
+  const submitBtn = event.target.querySelector('button[type="submit"]');
   try {
-    await api('/api/console/wheels', {
+    await busy(submitBtn, () => api('/api/console/wheels', {
       method: 'POST',
       body: JSON.stringify({
         code: $('#whCode').value.trim(),
         title: $('#whTitle').value.trim(),
         cost_pts: Number($('#whCost').value),
       }),
-    });
+    }));
     event.target.reset();
     toast('Лента создана');
-    loadLootAdmin();
+    guard(() => loadLootAdmin());
   } catch (error) {
-    toast(error.message);
+    handleError(error);
   }
 });
 
 $('#adminCreateForm').addEventListener('submit', async (event) => {
   event.preventDefault();
   const permissions = $$('#adPermissions input[name="perm"]:checked').map((i) => i.value);
+  const submitBtn = event.target.querySelector('button[type="submit"]');
+  if ($('#adPassword').value.length < 8) { toast('Пароль короче 8 символов'); return; }
   try {
-    await api('/api/console/admins', {
+    await busy(submitBtn, () => api('/api/console/admins', {
       method: 'POST',
       body: JSON.stringify({
         username: $('#adUsername').value.trim(),
@@ -494,18 +592,18 @@ $('#adminCreateForm').addEventListener('submit', async (event) => {
         password: $('#adPassword').value,
         permissions,
       }),
-    });
+    }));
     event.target.reset();
     toast('Учётка создана');
-    loadAdmins();
+    guard(() => loadAdmins());
   } catch (error) {
-    toast(error.message);
+    handleError(error);
   }
 });
 
-$('#deskSearchBtn').addEventListener('click', deskSearch);
+$('#deskSearchBtn').addEventListener('click', () => guard(() => deskSearch()));
 $('#deskSearch').addEventListener('keydown', (event) => {
-  if (event.key === 'Enter') deskSearch();
+  if (event.key === 'Enter') guard(() => deskSearch());
 });
 
 // --- ЖИВАЯ КАРТА (OASys) ---
@@ -525,10 +623,11 @@ async function loadOasysMap() {
 
   let map;
   try {
-    map = await api('/api/console/oasys/map');
+    map = await busy($('#oasysRefreshBtn'), () => api('/api/console/oasys/map'));
   } catch (error) {
     $('#oasysStats').innerHTML = '';
-    $('#oasysError').innerHTML = `<div class="empty">${esc(error.message)}</div>`;
+    $('#oasysError').innerHTML = `<div class="empty">${esc(describeError(error))}</div>`;
+    if (error.status === 401) sessionExpired();
     return;
   }
 
@@ -573,8 +672,8 @@ async function loadOasysMap() {
       ${table(['Код', 'Тип', 'Использован/лимит'], promoRows)}
     `;
   } catch (error) {
-    $('#oasysDiscountsTable').innerHTML = `<div class="empty">${esc(error.message)}</div>`;
+    $('#oasysDiscountsTable').innerHTML = `<div class="empty">${esc(describeError(error))}</div>`;
   }
 }
 
-$('#oasysRefreshBtn').addEventListener('click', loadOasysMap);
+$('#oasysRefreshBtn').addEventListener('click', () => guard(() => loadOasysMap()));
