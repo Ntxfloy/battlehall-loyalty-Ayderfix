@@ -29,11 +29,40 @@ const MOSCOW_TZ = 'Europe/Moscow';
 
 // --- сеть ---
 
+/* Ключ идемпотентности денежной операции.
+   В мобильной сети ответ легко теряется уже после того, как сервер списал PTS.
+   Один намерение гостя = один ключ, поэтому повтор запроса не списывает второй раз. */
+function newIdemKey(prefix) {
+  let random;
+  if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+    random = window.crypto.randomUUID().replace(/-/g, '');
+  } else {
+    random = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`;
+  }
+  return `${prefix}-${random}`.slice(0, 64);
+}
+
+/* Ключ живёт на кнопке: повторное нажатие после оборвавшегося запроса —
+   это та же операция, а не новая. После успеха ключ сбрасывается. */
+function stickyIdemKey(node, prefix) {
+  if (!node) return newIdemKey(prefix);
+  if (!node.dataset.idemKey) node.dataset.idemKey = newIdemKey(prefix);
+  return node.dataset.idemKey;
+}
+
+function clearIdemKey(node) {
+  if (node && node.dataset) delete node.dataset.idemKey;
+}
+
 async function api(path, options = {}) {
   const headers = Object.assign({ 'Content-Type': 'application/json' }, options.headers || {});
   if (tg && tg.initData) headers['X-Telegram-Init-Data'] = tg.initData;
+  if (options.idemKey) headers['Idempotency-Key'] = options.idemKey;
 
-  const response = await fetch(path, Object.assign({}, options, { headers }));
+  const request = Object.assign({}, options, { headers });
+  delete request.idemKey;
+
+  const response = await fetch(path, request);
   const text = await response.text();
   let data = null;
   try {
@@ -601,11 +630,14 @@ document.addEventListener('click', async (event) => {
 
   if (redeem) {
     redeem.disabled = true;
+    const idemKey = stickyIdemKey(redeem, 'redeem');
     try {
       await api('/api/rewards/redeem', {
         method: 'POST',
+        idemKey,
         body: JSON.stringify({ reward_id: Number(redeem.dataset.redeem) }),
       });
+      clearIdemKey(redeem);
       toast('Код готов — покажи его администратору');
       haptic('success');
       await refreshAll();
@@ -907,12 +939,19 @@ async function spin(wheelId, count, button, allIn = false) {
   const siblingButtons = card ? Array.from(card.querySelectorAll('button')) : [button];
   siblingButtons.forEach((b) => { b.disabled = true; });
 
+  // Ключ держится на кнопке до успешного ответа: если сеть оборвалась после
+  // списания, повторное нажатие уйдёт с тем же ключом и сервер ответит ошибкой
+  // вместо второго списания ставки.
+  const idemKey = stickyIdemKey(button, 'spin');
+
   let result;
   try {
     result = await api('/api/wheels/spin', {
       method: 'POST',
+      idemKey,
       body: JSON.stringify(allIn ? { wheel_id: Number(wheelId), all_in: true } : { wheel_id: Number(wheelId), count }),
     });
+    clearIdemKey(button);
   } catch (error) {
     toast(error.message);
     haptic('error');

@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.auth import current_user
@@ -20,6 +20,27 @@ router = APIRouter(prefix="/api", tags=["miniapp"])
 settings = get_settings()
 
 CHANNEL_ACHIEVEMENT = "special_channel_sub"
+TELEGRAM_API_HOST = "https://api.telegram.org"
+
+# Мини-апп работает в мобильной сети: ответ теряется чаще, чем хочется, а гость
+# жмёт кнопку повторно. Клиент присылает свой ключ операции, сервер по нему
+# отличает повтор от нового действия. Длину ограничиваем: ключ уезжает в колонку
+# pts_transactions.idem_key шириной 128 символов вместе с префиксом и id гостя.
+IDEMPOTENCY_KEY_MAX_LEN = 64
+
+
+def _clean_idem_key(value: str | None) -> str | None:
+    """Заголовок приходит с клиента, поэтому ему нельзя верить на слово."""
+    if value is None:
+        return None
+    key = value.strip()
+    if not key:
+        return None
+    if len(key) > IDEMPOTENCY_KEY_MAX_LEN:
+        raise HTTPException(status_code=400, detail="Слишком длинный ключ идемпотентности")
+    if not all(ch.isalnum() or ch in "-_:." for ch in key):
+        raise HTTPException(status_code=400, detail="Недопустимый ключ идемпотентности")
+    return key
 
 
 def _group_payload(hours_year: float) -> dict:
@@ -59,8 +80,6 @@ def _redemption_payload(row, now: datetime | None = None) -> dict:
         "expires_at": iso(row.expires_at),
         "used_at": iso(row.used_at),
     }
-
-
 
 
 @router.get("/me")
@@ -119,7 +138,7 @@ def check_subscription(user: User = Depends(current_user), db: Session = Depends
     if not settings.bot_token or not settings.channel_id:
         raise HTTPException(status_code=503, detail="Канал не настроен на сервере")
 
-    url = f"https://api.telegram.org/bot{settings.bot_token}/getChatMember"
+    url = f"{TELEGRAM_API_HOST}/bot{settings.bot_token}/getChatMember"
     try:
         response = httpx.get(
             url,
@@ -165,22 +184,19 @@ def get_rewards(user: User = Depends(current_user), db: Session = Depends(get_db
     }
 
 
-
-
-
 @router.post("/rewards/redeem")
 def redeem_reward(
     body: RedeemRequest,
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> dict:
     try:
-        row = rewards.redeem(db, user, body.reward_id)
+        row = rewards.redeem(db, user, body.reward_id, idem_key=_clean_idem_key(idempotency_key))
         db.commit()
     except rewards.RewardError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, "balance": user.pts_balance, "redemption": _redemption_payload(row)}
-
 
 
 @router.get("/redemptions")
@@ -307,16 +323,29 @@ def spin_wheel(
     body: SpinRequest,
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> dict:
+    """Прокрутка ленты.
+
+    С заголовком `Idempotency-Key` повторный запрос с тем же ключом не спишет
+    ставку второй раз, а вернёт понятную ошибку — переигрывать уже выпавший приз
+    нельзя, иначе гость получит второй результат бесплатно.
+    """
     from app.services import wheel as wheel_service
 
     try:
-        res = wheel_service.spin(db, user, body.wheel_id, body.count, body.all_in)
+        res = wheel_service.spin(
+            db,
+            user,
+            body.wheel_id,
+            body.count,
+            body.all_in,
+            idem_key=_clean_idem_key(idempotency_key),
+        )
         db.commit()
         return res
     except wheel_service.WheelError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
 
 
 @router.get("/wheels/history")
