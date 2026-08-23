@@ -3,6 +3,14 @@
 Схема из спеки: гость обменивает PTS -> получает код, код виден только внутри
 мини-аппа и живёт 24 часа, админ гасит его на стойке и переносит строку
 в гугл-таблицу компенсаций.
+
+Два места здесь требуют аккуратности при конкурентных запросах:
+
+1. Генерация кода. Проверка SELECT’ом — только быстрый путь; истинную
+   уникальность гарантирует уникальный индекс на reward_redemptions.code.
+2. Возврат PTS за сгоревший код. У возврата есть естественный ключ идемпотентности —
+   сам код, поэтому даже если отметка refunded_at будет сброшена руками
+   или регламент запустится дважды, PTS вернутся ровно один раз.
 """
 
 import logging
@@ -10,6 +18,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -22,20 +31,23 @@ settings = get_settings()
 
 _CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 _CODE_LEN = 8
+# Сколько раз пробуем подобрать свободный код. При 32 символах алфавита и длине 8
+# пространство — около 1.1e12 вариантов, так что даже одно столкновение маловероятно.
+_CODE_ATTEMPTS = 8
 
 
 class RewardError(Exception):
     pass
 
 
-def _generate_code(db: Session) -> str:
-    while True:
-        code = "".join(secrets.choice(_CODE_ALPHABET) for _ in range(_CODE_LEN))
-        exists = db.execute(
-            select(RewardRedemption.id).where(RewardRedemption.code == code)
-        ).first()
-        if not exists:
-            return code
+def _random_code() -> str:
+    return "".join(secrets.choice(_CODE_ALPHABET) for _ in range(_CODE_LEN))
+
+
+def _code_taken(db: Session, code: str) -> bool:
+    return db.execute(
+        select(RewardRedemption.id).where(RewardRedemption.code == code)
+    ).first() is not None
 
 
 def catalog(db: Session) -> list[Reward]:
@@ -46,7 +58,12 @@ def catalog(db: Session) -> list[Reward]:
     )
 
 
-def redeem(db: Session, user: User, reward_id: int) -> RewardRedemption:
+def redeem(
+    db: Session,
+    user: User,
+    reward_id: int,
+    idem_key: str | None = None,
+) -> RewardRedemption:
     reward = db.get(Reward, reward_id)
     if reward is None or not reward.is_active:
         raise RewardError("Награда недоступна")
@@ -64,6 +81,7 @@ def redeem(db: Session, user: User, reward_id: int) -> RewardRedemption:
             ref_type="reward",
             ref_id=str(reward.id),
             comment=reward.title,
+            idem_key=(f"reward_redeem:{user.id}:{idem_key}" if idem_key else None),
         )
     except pts.InsufficientFunds as exc:
         raise RewardError(f"Не хватает PTS: {exc}") from exc
@@ -79,22 +97,43 @@ def issue_code(
     source: str = "catalog",
 ) -> RewardRedemption:
     now = datetime.now(timezone.utc)
-    redemption = RewardRedemption(
-        user_id=user.id,
-        reward_id=reward.id,
-        code=_generate_code(db),
-        status=RedemptionStatus.PENDING,
-        pts_spent=pts_spent,
-        reward_title=reward.title,
-        payout_value=reward.payout_value,
-        payout_unit=reward.payout_unit,
-        created_at=now,
-        expires_at=now + timedelta(hours=settings.reward_code_ttl_hours),
-        source=source,
-    )
-    db.add(redemption)
+    # Списание PTS уже могло пройти выше — отправляем его в базу до SAVEPOINT,
+    # чтобы откат неудачного кандидата кода не тронул чужие изменения.
     db.flush()
-    return redemption
+
+    last_error: IntegrityError | None = None
+    for _ in range(_CODE_ATTEMPTS):
+        code = _random_code()
+        if _code_taken(db, code):
+            continue   # быстрый путь: не трогаем БД записью без нужды
+
+        redemption = RewardRedemption(
+            user_id=user.id,
+            reward_id=reward.id,
+            code=code,
+            status=RedemptionStatus.PENDING,
+            pts_spent=pts_spent,
+            reward_title=reward.title,
+            payout_value=reward.payout_value,
+            payout_unit=reward.payout_unit,
+            created_at=now,
+            expires_at=now + timedelta(hours=settings.reward_code_ttl_hours),
+            source=source,
+        )
+        try:
+            with db.begin_nested():
+                db.add(redemption)
+                db.flush()
+        except IntegrityError as exc:
+            # Параллельный запрос занял этот код между SELECT и INSERT.
+            # SAVEPOINT откачен, пробуем следующего кандидата.
+            last_error = exc
+            continue
+        return redemption
+
+    if last_error is not None:
+        raise RewardError("Не удалось выдать код, попробуй ещё раз") from last_error
+    raise RewardError("Не удалось выдать код, попробуй ещё раз")
 
 
 def active_redemption(db: Session, user: User) -> RewardRedemption | None:
@@ -142,6 +181,12 @@ def _conflict_message(row: RewardRedemption) -> str:
     if status == RedemptionStatus.CANCELLED:
         return "Код отменён"
     return "Код уже обработан в другой сессии"
+
+
+def _refund_key(row: RewardRedemption) -> str:
+    """Ключ идемпотентности возврата. Код уникален, значит и возврат за него
+    может быть только один."""
+    return f"reward_refund:{row.code}"
 
 
 def expire_due(db: Session, *, user_id: int | None = None, limit: int = 200) -> int:
@@ -201,6 +246,7 @@ def expire_due(db: Session, *, user_id: int | None = None, limit: int = 200) -> 
             ref_type="redemption",
             ref_id=row.code,
             comment=f"Возврат за сгоревший код {row.code}",
+            idem_key=_refund_key(row),
         )
     return expired
 
@@ -286,6 +332,7 @@ def _refund_if_needed(db: Session, row: RewardRedemption, now: datetime) -> None
         ref_type="redemption",
         ref_id=row.code,
         comment=f"Возврат за отклонённый истёкший код {row.code}",
+        idem_key=_refund_key(row),
     )
 
 
