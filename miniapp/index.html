@@ -7,6 +7,7 @@
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <link rel="stylesheet" href="/static/brand/brand.css?v=7">
   <link rel="stylesheet" href="/styles.css?v=7">
+  <link rel="stylesheet" href="/mobile.css?v=1">
 </head>
 <body>
   <div id="app">
@@ -16,14 +17,12 @@
     </header>
 
     <main id="screens">
-      <!-- ГЛАВНАЯ -->
       <section class="screen" data-screen="home">
         <div class="card group-card" id="groupCard"></div>
         <div class="stats-row" id="statsRow"></div>
         <div class="card daily-card" id="dailyCard"></div>
       </section>
 
-      <!-- ДОСТИЖЕНИЯ -->
       <section class="screen" data-screen="achievements" hidden>
         <div class="segmented" id="achTabs">
           <button class="seg active" data-cat="weekly">Еженедельные</button>
@@ -33,18 +32,15 @@
         <div id="achList" class="list"></div>
       </section>
 
-      <!-- НАГРАДЫ -->
       <section class="screen" data-screen="rewards" hidden>
         <div id="activeCode"></div>
         <div id="rewardList" class="list"></div>
       </section>
 
-      <!-- ЛУДЛЕНТА -->
       <section class="screen" data-screen="loot" hidden>
         <div id="lootList"></div>
       </section>
 
-      <!-- ПРОФИЛЬ -->
       <section class="screen" data-screen="profile" hidden>
         <div class="card" id="referralCard"></div>
         <div class="accordion">
@@ -75,9 +71,6 @@
     </nav>
   </div>
 
-  <!-- Подтверждение ALL IN — свой оверлей, а не window.confirm/tg.showConfirm:
-       внутри Telegram WebView синхронные диалоги браузера часто блокируются
-       молча, кнопка тогда выглядит нажатой, но ничего не происходит. -->
   <div id="allinConfirmOverlay" class="spin-overlay allin-confirm" hidden>
     <div class="spin-box allin-confirm-box">
       <div class="allin-confirm-title">ALL IN</div>
@@ -89,8 +82,6 @@
     </div>
   </div>
 
-  <!-- Оверлей прокрутки: при x5/x10 несколько лент едут параллельно, каждая
-       тормозит на своём призе — как в кейс-опенингах и слотах. -->
   <div id="spinOverlay" class="spin-overlay" hidden>
     <div class="spin-box">
       <div class="spin-title-row">
@@ -104,16 +95,14 @@
     </div>
   </div>
 
-  <!-- Монетки с неба на выигрыш — отдельный полноэкранный слой, сам себя чистит. -->
   <div id="coinRain" class="coin-rain"></div>
 
-  <!-- WASTED — GTA-стиль на минус по итогу прокрутки. Отдельный полноэкранный
-       оверлей поверх всего, само гаснет через пару секунд. -->
   <div id="wastedOverlay" class="wasted-overlay" hidden>
     <div class="wasted-text">WASTED</div>
   </div>
 
   <div id="toast" class="toast" hidden></div>
   <script src="/app.js?v=7"></script>
+  <script src="/spin-guard.js?v=1"></script>
 </body>
 </html>
