@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>BATTLEHALL — админка</title>
-  <link rel="stylesheet" href="/static/brand/brand.css?v=6">
-  <link rel="stylesheet" href="/admin/styles.css?v=6">
+  <link rel="stylesheet" href="/static/brand/brand.css?v=7">
+  <link rel="stylesheet" href="/admin/styles.css?v=7">
 </head>
 <body>
   <!-- экран входа -->
@@ -32,7 +32,7 @@
         <button class="nav-item" data-view="achievements" data-perm="catalog.edit">Достижения</button>
         <button class="nav-item" data-view="rewards" data-perm="catalog.edit">Награды</button>
         <button class="nav-item" data-view="loot" data-perm="catalog.edit">ЛУДЛЕНТА</button>
-        <button class="nav-item" data-view="clubs" data-perm="clubs.edit">Клубы</button>
+        <button class="nav-item" data-view="clubs" data-perm="clubs.view">Клубы</button>
         <button class="nav-item" data-view="reports" data-perm="reports.view">Отчёты</button>
         <button class="nav-item" data-view="admins" data-perm="admins.manage">Администраторы</button>
         <button class="nav-item" data-view="oasys" data-perm="oasys.view">Живая карта</button>
@@ -89,7 +89,7 @@
           <div id="codeResult"></div>
         </div>
         <div class="panel">
-          <h2>Использованные коды, не выгруженные в таблицу</h2>
+          <h2>Подтверждённые коды, не выгруженные в таблицу</h2>
           <div id="codesTable" class="table-wrap"></div>
         </div>
       </section>
@@ -164,7 +164,7 @@
             <select id="testEndClub"></select>
             <input id="testEndTelegramId" type="number" placeholder="telegram_id" required>
             <input id="testEndSessionId" type="text" placeholder="session_id из ответа выше" required>
-            <input id="testEndMinutes" type="number" min="0" placeholder="минут (опц.)">
+            <input id="testEndMinutes" type="number" min="0" max="1440" placeholder="минут (опц.)">
             <button class="btn primary" type="submit">Отправить</button>
           </form>
           <div id="testEndResult" class="result-box"></div>
@@ -270,7 +270,7 @@
   </div>
 
   <div id="toast" class="toast" hidden></div>
-  <script src="/admin/app.js?v=6"></script>
-  <script src="/admin/sections.js?v=6"></script>
+  <script src="/admin/app.js?v=7"></script>
+  <script src="/admin/sections.js?v=7"></script>
 </body>
 </html>
