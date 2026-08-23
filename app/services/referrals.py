@@ -7,7 +7,7 @@
 import logging
 import secrets
 
-from sqlalchemy import func, select
+from sqlalchemy import Integer, cast, func, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -109,7 +109,7 @@ def summary(db: Session, user: User) -> dict:
     invited_total, invited_credited = db.execute(
         select(
             func.count(User.id),
-            func.coalesce(func.sum(func.cast(User.referral_credited, int)), 0),
+            func.coalesce(func.sum(cast(User.referral_credited, Integer)), 0),
         ).where(User.referred_by_id == user.id)
     ).one()
     return {
