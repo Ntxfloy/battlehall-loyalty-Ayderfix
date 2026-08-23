@@ -25,6 +25,8 @@ const state = {
   loaded: {},
 };
 
+const MOSCOW_TZ = 'Europe/Moscow';
+
 // --- сеть ---
 
 async function api(path, options = {}) {
@@ -33,7 +35,12 @@ async function api(path, options = {}) {
 
   const response = await fetch(path, Object.assign({}, options, { headers }));
   const text = await response.text();
-  const data = text ? JSON.parse(text) : null;
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch (e) {
+    throw new Error(response.ok ? 'Сервер вернул не JSON' : 'Что-то пошло не так');
+  }
 
   if (!response.ok) {
     throw new Error((data && data.detail) || 'Что-то пошло не так');
@@ -76,17 +83,9 @@ function hapticImpact(style) {
   }
 }
 
-// --- звук ЛУДЛЕНТЫ: генерируется на лету через Web Audio, без файлов ---
-// (кейс-батлы и казино-приложения держат такое на десятках сэмплов —
-// здесь то же самое даёт горстка осцилляторов и один шумовой буфер).
-
 let audioCtx = null;
 let masterBus = null;
 
-// Разблокировать/поднять контекст можно только по жесту пользователя —
-// вызывается синхронно в самом начале обработчика клика, до всех await.
-// Всё звучит через один компрессор: слоёв много (тики + аккорды + вспышки
-// разом), без общего лимитера они бы клипались в жёсткий треск.
 function unlockAudio() {
   if (!audioCtx) {
     const Ctx = window.AudioContext || window.webkitAudioContext;
@@ -122,14 +121,11 @@ function tone(freq, duration, { type = 'sine', peak = 0.26, delay = 0, slideTo =
   osc.stop(start + duration + 0.02);
 }
 
-// Тот же тон, но двумя чуть расстроенными голосами разом — гуще и «богаче»,
-// как аккорды в кейс-батлах, а не сухой одиночный писк.
 function chordTone(freq, duration, opts = {}) {
   tone(freq, duration, { ...opts, detune: -6 });
   tone(freq, duration, { ...opts, detune: 6, peak: (opts.peak ?? 0.26) * 0.85 });
 }
 
-// Короткий шумовой «щелчок» — тик ленты, стопка фишек, искры.
 function noiseTick({ delay = 0, duration = 0.03, filterFreq = 2200, peak = 0.2 } = {}) {
   const ctx = audioCtx;
   if (!ctx) return;
@@ -153,10 +149,6 @@ function noiseTick({ delay = 0, duration = 0.03, filterFreq = 2200, peak = 0.2 }
   src.stop(start + duration + 0.01);
 }
 
-// Тики ленты по замедляющемуся графику — совпадает с тем, как в CSS
-// тормозит сам барабан (быстро в начале, редко к остановке). Планируются
-// через setTimeout (не через currentTime audio-контекста), чтобы кнопка
-// «Пропустить» могла их оборвать через clearTimeout — см. registry в spin().
 function scheduleReelTicks(durationMs, registry) {
   const count = 22;
   for (let i = 0; i < count; i += 1) {
@@ -166,28 +158,24 @@ function scheduleReelTicks(durationMs, registry) {
   }
 }
 
-// Разгон ленты: шипящий райзер сверху + низкий толчок снизу — тот самый
-// «вжух» перед прокруткой из кейс-опенингов.
 function playSpinWhoosh() {
   tone(180, 0.35, { type: 'sawtooth', peak: 0.09, slideTo: 60 });
   tone(45, 0.3, { type: 'sine', peak: 0.2 });
   noiseTick({ duration: 0.3, filterFreq: 3600, peak: 0.16 });
 }
 
-// Common/пусто — мягкий стук без тона, дальше по редкости всё сочнее и гуще,
-// легендарка — полноценное фанфарное арпеджио с саб-дропом и искрящимся хвостом.
 function playLandingSound(prize) {
   if (prize.kind === 'nothing') {
     noiseTick({ duration: 0.05, filterFreq: 300, peak: 0.15 });
     return;
   }
   if (prize.rarity === 'legendary') {
-    tone(48, 0.16, { type: 'sine', peak: 0.42 });                 // саб-дроп удара
+    tone(48, 0.16, { type: 'sine', peak: 0.42 });
     noiseTick({ duration: 0.08, filterFreq: 250, peak: 0.3 });
     [523, 659, 784, 1046, 1318, 1568].forEach((f, i) =>
       chordTone(f, 0.55, { type: 'triangle', peak: 0.28, delay: 0.06 + i * 0.065 }));
     tone(90, 0.7, { type: 'sine', peak: 0.32, delay: 0.06 });
-    noiseTick({ duration: 0.5, filterFreq: 7500, peak: 0.16, delay: 0.4 }); // искрящийся хвост
+    noiseTick({ duration: 0.5, filterFreq: 7500, peak: 0.16, delay: 0.4 });
   } else if (prize.rarity === 'epic') {
     [523, 659, 784].forEach((f, i) => chordTone(f, 0.3, { type: 'triangle', peak: 0.22, delay: i * 0.06 }));
     noiseTick({ duration: 0.15, filterFreq: 5000, peak: 0.12, delay: 0.16 });
@@ -199,14 +187,12 @@ function playLandingSound(prize) {
   }
 }
 
-// Кэш-чайм на итоговый плюс — восходящий забег + искра сверху.
 function playWinChime() {
   [660, 880, 1108, 1320].forEach((f, i) => tone(f, 0.22, { type: 'square', peak: 0.22, delay: i * 0.06 }));
   tone(1760, 0.5, { type: 'sine', peak: 0.16, delay: 0.2 });
   noiseTick({ duration: 0.4, filterFreq: 6500, peak: 0.14, delay: 0.05 });
 }
 
-// Звон монет по мере падения — под визуальный ливень из spawnCoinRain().
 function playCoinJingle() {
   const notes = [1046, 1318, 1568, 1760, 2093];
   for (let i = 0; i < 12; i += 1) {
@@ -221,7 +207,6 @@ function playWasted() {
   tone(260, 0.9, { type: 'sawtooth', peak: 0.14, slideTo: 55 });
 }
 
-// Фишки одна за одной ложатся на стол — открытие подтверждения ALL IN.
 function playAllInStack() {
   for (let i = 0; i < 6; i += 1) {
     noiseTick({ delay: i * 0.05, filterFreq: 900 - i * 60, duration: 0.05, peak: 0.22 });
@@ -232,9 +217,6 @@ function playUiClick() {
   noiseTick({ duration: 0.02, filterFreq: 3200, peak: 0.13 });
 }
 
-// Свой оверлей вместо window.confirm()/tg.showConfirm(): внутри Telegram
-// WebView синхронные диалоги браузера часто молча блокируются или сразу
-// возвращают false — кнопка тогда выглядит нажатой, а ничего не происходит.
 let allinConfirmResolve = null;
 
 function confirmAllIn(message) {
@@ -278,15 +260,16 @@ function timeLeft(iso) {
 }
 
 function formatDate(iso) {
-  const d = new Date(iso);
-  return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' });
+  return new Date(iso).toLocaleDateString('ru-RU', {
+    day: '2-digit', month: '2-digit', year: '2-digit', timeZone: MOSCOW_TZ,
+  });
 }
 
 function formatTime(iso) {
-  return new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  return new Date(iso).toLocaleTimeString('ru-RU', {
+    hour: '2-digit', minute: '2-digit', timeZone: MOSCOW_TZ,
+  });
 }
-
-// --- навигация ---
 
 function showScreen(name) {
   document.querySelectorAll('[data-screen]').forEach((node) => {
@@ -314,8 +297,6 @@ document.querySelectorAll('.seg').forEach((node) => {
     renderAchievements();
   });
 });
-
-// --- ГЛАВНАЯ ---
 
 async function loadHome() {
   try {
@@ -378,8 +359,6 @@ function renderDaily(daily) {
   `;
 }
 
-// --- ДОСТИЖЕНИЯ ---
-
 async function loadAchievements() {
   $('#achList').innerHTML = '<div class="skeleton"></div><div class="skeleton"></div>';
   try {
@@ -405,7 +384,9 @@ function renderAchievements() {
 }
 
 function achievementCard(item) {
-  const percent = Math.min(Math.round((item.progress / item.target) * 100), 100);
+  const percent = item.target
+    ? Math.min(Math.round((item.progress / item.target) * 100), 100)
+    : 0;
 
   let action = '';
   if (item.can_claim) {
@@ -439,8 +420,6 @@ function achievementCard(item) {
     </div>
   `);
 }
-
-// --- НАГРАДЫ ---
 
 async function loadRewards() {
   $('#rewardList').innerHTML = '<div class="skeleton"></div><div class="skeleton"></div>';
@@ -489,8 +468,6 @@ function renderRewards() {
     `));
   });
 }
-
-// --- ПРОФИЛЬ ---
 
 async function loadProfile() {
   try {
@@ -591,11 +568,7 @@ async function accordionContent(key) {
   `).join('');
 }
 
-// --- действия ---
-
 document.addEventListener('click', async (event) => {
-  // Аудиоконтекст можно поднять только синхронно по жесту — до первого await,
-  // иначе браузер/WebView его не разблокирует.
   unlockAudio();
 
   const claim = event.target.closest('[data-claim]');
@@ -664,27 +637,15 @@ async function refreshAll() {
   if (state.loaded.loot !== undefined) await loadLoot();
 }
 
-// --- старт ---
-
 loadHome();
 
-// --- ЛУДЛЕНТА ---
-
-// Ширина ячейки и зазор должны совпадать с CSS: смещение ленты считается
-// в пикселях, и расхождение здесь остановит прокрутку мимо метки.
 const REEL_CELL_WIDTH = 116;
 const REEL_CELL_GAP = 8;
 const REEL_STEP = REEL_CELL_WIDTH + REEL_CELL_GAP;
 const SPIN_DURATION_MS = 5200;
-// x5/x10 крутят несколько лент ОДНОВРЕМЕННО (параллельно), как в кейс-опенингах
-// и слотах, а не по очереди. Каждая едет короче одиночной, иначе x10 тянулся бы
-// почти минуту, и останавливается на STAGGER позже предыдущей — не разом,
-// а каскадом слева направо/сверху вниз, как тормозят настоящие барабаны.
 const SPIN_DURATION_MULTI_MS = 1800;
 const REEL_STAGGER_MS = 220;
 const SPIN_COUNTS = [1, 5, 10];
-// Только для подписи на кнопке ALL IN — сколько прокруток реально спишется,
-// решает сервер (app/services/wheel.py: ALL_IN_CAP), это лишь оценка для UI.
 const ALL_IN_CAP = 20;
 
 async function loadLoot() {
@@ -747,8 +708,6 @@ function renderLoot() {
   `).join('');
 }
 
-// Одна лента на x1 (полноразмерная, как раньше), несколько параллельных
-// на x5/x10 (компактные, .mini) — создаются заново на каждую прокрутку.
 function buildReelLanes(count) {
   const grid = $('#reelsGrid');
   grid.innerHTML = Array.from({ length: count }, () => `
@@ -772,31 +731,19 @@ function renderReel(reelEl, reel) {
       <span>${esc(cell.title)}</span>
     </div>
   `).join('');
-  // читаем layout, чтобы сброс transform применился до старта анимации
   void reelEl.offsetWidth;
 }
 
-// Казино-эффект в два шага: сперва разгон со смазом мимо метки (overshoot),
-// затем упругий отскок ровно на приз (--ease-spring из брендбука) — так
-// остановка выглядит живой, а не остановленной по линейке.
 const REEL_OVERSHOOT = REEL_STEP * 0.4;
 const REEL_SETTLE_SHARE = 0.18;
 
-// skipRegistry (необязательный массив) собирает по одной функции-«прыжку в
-// конец» на каждую ленту — кнопка «Пропустить» (только у пачек x5+, см. spin())
-// вызывает их все разом, чтобы не ждать честной анимации до конца.
 function runReel(windowEl, reelEl, winningIndex, duration, skipRegistry) {
   return new Promise((resolve) => {
     const windowWidth = windowEl.clientWidth;
-
-    // Небольшой сдвиг внутри ячейки — чтобы лента не замирала всегда идеально
-    // по центру: так остановка выглядит живой, а не отрисованной.
     const jitter = (Math.random() - 0.5) * (REEL_CELL_WIDTH * 0.5);
     const offset = winningIndex * REEL_STEP + REEL_CELL_WIDTH / 2 - windowWidth / 2 + jitter;
-
     const settleDuration = Math.round(duration * REEL_SETTLE_SHARE);
     const runDuration = duration - settleDuration;
-
     let done = false;
     let pendingTimeout;
 
@@ -830,14 +777,10 @@ function runReel(windowEl, reelEl, winningIndex, duration, skipRegistry) {
   });
 }
 
-// Отдача на приземление — вспышка/тряска по редкости, как в реальных
-// игровых автоматах. Common/пусто — без спецэффектов, не всё же дожимать.
 function applyLandingEffect(windowEl, prize) {
   playLandingSound(prize);
-
   const cls = { rare: 'reel-hit-rare', epic: 'reel-hit-epic', legendary: 'reel-hit-legendary' }[prize.rarity];
   if (!cls) return;
-
   windowEl.classList.add(cls);
   if (prize.rarity === 'legendary') {
     hapticImpact('heavy');
@@ -869,11 +812,9 @@ function renderMultiResult(spins) {
   const totalPts = spins.reduce((sum, s) => sum + (s.prize.pts_won || 0), 0);
   const codes = spins.map((s) => s.prize).filter((p) => p.code);
   haptic(wins.length ? 'success' : 'warning');
-
   const sorted = [...spins].sort(
     (a, b) => (RARITY_ORDER[b.prize.rarity] || 0) - (RARITY_ORDER[a.prize.rarity] || 0)
   );
-
   $('#spinResult').innerHTML = `
     <div class="prize-label">Результаты пачки — x${spins.length}</div>
     <div class="multi-prize-grid">
@@ -889,16 +830,12 @@ function renderMultiResult(spins) {
   `;
 }
 
-// Итог по PTS: приз-награда (код) всегда засчитывается победой, даже если
-// сырой баланс PTS в минусе — гость получил реальную ценность, а не пусто.
 function evaluateOutcome(spins, costPts) {
   const totalWon = spins.reduce((sum, s) => sum + (s.prize.pts_won || 0), 0);
   const gotReward = spins.some((s) => s.prize.code);
   return { net: totalWon - costPts, gotReward };
 }
 
-// Монетки с неба: каждая летит по своей случайной колонке/скорости/повороту
-// через CSS-переменные (см. .coin в styles.css) — без канваса, чистый DOM.
 function spawnCoinRain(count = 26) {
   const container = $('#coinRain');
   container.innerHTML = '';
@@ -966,8 +903,6 @@ async function spin(wheelId, count, button, allIn = false) {
     if (!sure) return;
   }
 
-  // Блокируем все кнопки карточки (x1/x5/x10 и ALL IN разом) — нельзя
-  // запустить вторую прокрутку той же ленты, пока первая ещё крутится.
   const card = button.closest('.loot-card');
   const siblingButtons = card ? Array.from(card.querySelectorAll('button')) : [button];
   siblingButtons.forEach((b) => { b.disabled = true; });
@@ -996,8 +931,6 @@ async function spin(wheelId, count, button, allIn = false) {
   lanes.forEach((lane, i) => renderReel(lane.reelEl, spins[i].reel));
   playSpinWhoosh();
 
-  // «Пропустить» — только у пачек x5+ (тянуть x10/ALL IN до конца честной
-  // анимации не всегда хочется). Обрывает и ленты, и запланированные тики.
   const skipLanes = [];
   const tickTimeouts = [];
   const skipBtn = $('#spinSkipBtn');
@@ -1009,8 +942,6 @@ async function spin(wheelId, count, button, allIn = false) {
     skipBtn.hidden = true;
   };
 
-  // Все ленты едут одновременно — стопорятся каскадом (i-я на i*STAGGER позже),
-  // и каждая вспыхивает и звучит по своей редкости сразу как остановилась.
   await Promise.all(
     lanes.map((lane, i) => {
       const laneDuration = duration + i * REEL_STAGGER_MS;
@@ -1030,8 +961,6 @@ async function spin(wheelId, count, button, allIn = false) {
 
   $('#spinResult').hidden = false;
   $('#spinClose').hidden = false;
-  // Возвращаем кнопки в строй сразу: если гость закроет оверлей не кнопкой
-  // «Закрыть», перерисовки списка не будет и кнопки остались бы мёртвыми.
   siblingButtons.forEach((b) => { b.disabled = false; });
 }
 
