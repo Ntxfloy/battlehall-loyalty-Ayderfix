@@ -163,12 +163,24 @@ def spin(db: Session, user: User, wheel_id: int, count: int = 1, all_in: bool = 
     if not pool:
         raise WheelError("У ленты пока нет призов")
 
+    # Mini App и каталог показывают один активный код. Пакетная прокрутка ленты,
+    # из которой могут выпасть коды, могла создать сразу несколько pending-кодов
+    # и сделать остальные невидимыми. Проверяем инвариант до любого списания.
+    has_reward_prizes = any(
+        prize.kind == PrizeKind.REWARD and prize.weight > 0 for prize in pool
+    )
+    if has_reward_prizes and rewards.active_redemption(db, user) is not None:
+        raise WheelError("У тебя уже есть активный код — сначала используй его")
+
     if all_in:
         count = min(user.pts_balance // wheel.cost_pts, ALL_IN_CAP)
         if count < 1:
             raise WheelError(f"Не хватает PTS даже на одну прокрутку: нужно {wheel.cost_pts}, на балансе {user.pts_balance}")
     elif count not in SPIN_COUNTS:
         raise WheelError("Неверное количество прокруток")
+
+    if has_reward_prizes and count > 1:
+        raise WheelError("Для ленты с кодами доступна только одна прокрутка за раз")
 
     total_cost = wheel.cost_pts * count
     if all_in:
