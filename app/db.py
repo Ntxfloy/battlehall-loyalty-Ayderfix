@@ -39,13 +39,20 @@ def get_db() -> Iterator[Session]:
 
 
 def init_db() -> None:
-    """Создаёт таблицы и досинхронизирует колонки.
+    """Создаёт таблицы и досинхронизирует колонки и индексы.
 
     Для MVP этого хватает; перед продом сюда встанет Alembic —
     см. app/schema_sync.py о том, чего этот механизм заведомо не умеет."""
     from app import models  # noqa: F401  — регистрация моделей в метаданных
-    from app.schema_sync import backfill_wheel_prize_reasons, sync_sqlite_columns
+    from app.schema_sync import (
+        backfill_wheel_prize_reasons,
+        sync_sqlite_columns,
+        sync_sqlite_indexes,
+    )
 
     Base.metadata.create_all(bind=engine)
     sync_sqlite_columns(engine)
+    # Индексы — строго после колонок: уникальный индекс по новой колонке
+    # иначе не создать.
+    sync_sqlite_indexes(engine)
     backfill_wheel_prize_reasons(engine)

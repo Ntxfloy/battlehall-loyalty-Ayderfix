@@ -201,6 +201,13 @@ class PtsTransaction(Base):
     ref_type: Mapped[str | None] = mapped_column(String(32))
     ref_id: Mapped[str | None] = mapped_column(String(64))
     comment: Mapped[str | None] = mapped_column(Text)
+
+    # Ключ идемпотентности денежной операции: уникальный индекс не даёт
+    # повторному запросу списать или начислить PTS второй раз. NULL — операция
+    # без ключа (исторические строки и случаи, где повтор невозможен);
+    # в SQL несколько NULL не конфликтуют между собой.
+    idem_key: Mapped[str | None] = mapped_column(String(128), unique=True, index=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
 
