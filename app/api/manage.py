@@ -394,14 +394,13 @@ def grant_pts(
     return {"ok": True, "balance": user.pts_balance}
 
 
-
 # ============================================================
 #  Google Sheets
 # ============================================================
 
 @router.get("/sheets/status")
 def sheets_status(
-    _: AdminUser = Depends(require_permission(perms.CODES_APPROVE)),
+    _: AdminUser = Depends(require_permission(perms.REPORTS_EXPORT)),
     db: Session = Depends(get_db),
 ) -> dict:
     """Состояние интеграции и сколько строк ждёт выгрузки."""
@@ -417,7 +416,7 @@ def sheets_status(
 
 @router.post("/sheets/check")
 def sheets_check(
-    _: AdminUser = Depends(require_permission(perms.CODES_APPROVE)),
+    _: AdminUser = Depends(require_permission(perms.REPORTS_EXPORT)),
 ) -> dict:
     """Проверка доступа: открывается ли таблица сервисным аккаунтом."""
     from app.services import sheets
@@ -430,7 +429,7 @@ def sheets_check(
 
 @router.post("/sheets/export")
 def sheets_export(
-    admin: AdminUser = Depends(require_permission(perms.CODES_APPROVE)),
+    admin: AdminUser = Depends(require_permission(perms.REPORTS_EXPORT)),
     db: Session = Depends(get_db),
 ) -> dict:
     """Выгрузить всё подтверждённое, что ещё не уехало в таблицу."""

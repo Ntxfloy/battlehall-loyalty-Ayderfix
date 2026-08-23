@@ -20,11 +20,14 @@ CODES_APPROVE = "codes.approve"    # подтверждать внесённые
 USERS_VIEW = "users.view"
 PTS_GRANT = "pts.grant"            # начислять/списывать PTS вручную
 CATALOG_EDIT = "catalog.edit"      # достижения, награды, ЛУДЛЕНТА
+CLUBS_VIEW = "clubs.view"          # список клубов без токена вебхука
 CLUBS_EDIT = "clubs.edit"
 REPORTS_VIEW = "reports.view"
+REPORTS_EXPORT = "reports.export"  # выгрузка компенсаций, не аппрув кода
 LOGS_VIEW = "logs.view"
 TEST_TOOLS = "test.tools"          # отправка тестовых вебхуков
 ADMINS_MANAGE = "admins.manage"    # управление учётками (только владелец)
+MAINTENANCE_RUN = "maintenance.run"  # регламентные прогоны, например expire-codes
 OASYS_VIEW = "oasys.view"          # живая карта зала и кассовая статистика из API OASys
 
 ALL_PERMISSIONS: tuple[str, ...] = (
@@ -34,11 +37,14 @@ ALL_PERMISSIONS: tuple[str, ...] = (
     USERS_VIEW,
     PTS_GRANT,
     CATALOG_EDIT,
+    CLUBS_VIEW,
     CLUBS_EDIT,
     REPORTS_VIEW,
+    REPORTS_EXPORT,
     LOGS_VIEW,
     TEST_TOOLS,
     ADMINS_MANAGE,
+    MAINTENANCE_RUN,
     OASYS_VIEW,
 )
 
@@ -50,11 +56,14 @@ LABELS: dict[str, str] = {
     USERS_VIEW: "Смотреть пользователей",
     PTS_GRANT: "Начислять PTS вручную",
     CATALOG_EDIT: "Править достижения, награды и ЛУДЛЕНТУ",
+    CLUBS_VIEW: "Смотреть клубы сети",
     CLUBS_EDIT: "Управлять клубами сети",
     REPORTS_VIEW: "Смотреть отчёты",
+    REPORTS_EXPORT: "Выгружать компенсации",
     LOGS_VIEW: "Смотреть журнал действий",
     TEST_TOOLS: "Отправлять тестовые запросы",
     ADMINS_MANAGE: "Управлять учётками администраторов",
+    MAINTENANCE_RUN: "Запускать обслуживание",
     OASYS_VIEW: "Смотреть живую карту зала и кассу (OASys)",
 }
 
@@ -95,18 +104,15 @@ def validate_assignable(codes: list[str], *, target_is_owner: bool = False) -> l
     return sorted(set(clean))
 
 
-
 def dump(permissions, target_is_owner: bool = False) -> str:
     clean = validate_assignable(list(permissions), target_is_owner=target_is_owner)
     return json.dumps(clean)
-
 
 
 def granted(admin: AdminUser) -> set[str]:
     if admin.role == AdminRole.OWNER:
         return set(ALL_PERMISSIONS)
     return parse(admin.permissions) - OWNER_ONLY
-
 
 
 def has(admin: AdminUser, permission: str) -> bool:

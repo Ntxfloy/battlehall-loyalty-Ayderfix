@@ -72,7 +72,7 @@ def use_code(
 def list_redemptions(
     status: str = RedemptionStatus.APPROVED,
     only_new: bool = True,
-    _: Caller = Depends(require_admin_permission(perms.CODES_APPROVE)),
+    _: Caller = Depends(require_admin_permission(perms.REPORTS_EXPORT)),
     db: Session = Depends(get_db),
 ) -> dict:
     """Выгрузка для гугл-таблицы компенсаций.
@@ -110,7 +110,7 @@ def list_redemptions(
 @router.post("/redemptions/mark-exported")
 def mark_exported(
     codes: list[str],
-    caller: Caller = Depends(require_admin_permission(perms.CODES_APPROVE)),
+    caller: Caller = Depends(require_admin_permission(perms.REPORTS_EXPORT)),
     db: Session = Depends(get_db),
 ) -> dict:
     now = datetime.now(timezone.utc)
@@ -144,7 +144,7 @@ def grant_pts(
 
 @router.post("/maintenance/expire-codes")
 def expire_codes(
-    caller: Caller = Depends(require_admin_permission(perms.CODES_APPROVE)),
+    caller: Caller = Depends(require_admin_permission(perms.MAINTENANCE_RUN)),
     db: Session = Depends(get_db),
 ) -> dict:
     """Обычно коды гасятся лениво при обращении к наградам.
@@ -153,5 +153,3 @@ def expire_codes(
     audit.log(db, caller.label, "maintenance_expire_codes", detail={"count": count})
     db.commit()
     return {"expired": count}
-
-
