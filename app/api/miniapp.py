@@ -10,8 +10,8 @@ from app.auth import current_user
 from app.config import get_settings
 from app.db import get_db
 from app.loyalty import group_for_hours, next_group
-from app.models import User
-from app.periods import iso
+from app.models import RedemptionStatus, User
+from app.periods import ensure_utc, iso
 from app.schemas import ClaimRequest, RedeemRequest, SpinRequest
 from app.services import achievements, pts, referrals, rewards, sessions
 from app.zones import zone_title
@@ -43,6 +43,24 @@ def _group_payload(hours_year: float) -> dict:
         if nxt
         else None,
     }
+
+
+def _redemption_payload(row, now: datetime | None = None) -> dict:
+    if now is None:
+        now = datetime.now(timezone.utc)
+    return {
+        "code": row.code,
+        "status": rewards.effective_status(row, now),
+        "title": row.reward_title,
+        "pts_spent": row.pts_spent,
+        "payout_value": float(row.payout_value),
+        "payout_unit": row.payout_unit,
+        "created_at": iso(row.created_at),
+        "expires_at": iso(row.expires_at),
+        "used_at": iso(row.used_at),
+    }
+
+
 
 
 @router.get("/me")
@@ -125,6 +143,7 @@ def check_subscription(user: User = Depends(current_user), db: Session = Depends
 
 @router.get("/rewards")
 def get_rewards(user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
+    now = datetime.now(timezone.utc)
     active = rewards.active_redemption(db, user)
     return {
         "balance": user.pts_balance,
@@ -142,22 +161,11 @@ def get_rewards(user: User = Depends(current_user), db: Session = Depends(get_db
             }
             for r in rewards.catalog(db)
         ],
-        "active_code": _redemption_payload(active) if active else None,
+        "active_code": _redemption_payload(active, now) if active else None,
     }
 
 
-def _redemption_payload(row) -> dict:
-    return {
-        "code": row.code,
-        "status": row.status,
-        "title": row.reward_title,
-        "pts_spent": row.pts_spent,
-        "payout_value": float(row.payout_value),
-        "payout_unit": row.payout_unit,
-        "created_at": iso(row.created_at),
-        "expires_at": iso(row.expires_at),
-        "used_at": iso(row.used_at),
-    }
+
 
 
 @router.post("/rewards/redeem")
@@ -168,9 +176,11 @@ def redeem_reward(
 ) -> dict:
     try:
         row = rewards.redeem(db, user, body.reward_id)
+        db.commit()
     except rewards.RewardError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, "balance": user.pts_balance, "redemption": _redemption_payload(row)}
+
 
 
 @router.get("/redemptions")
@@ -301,9 +311,12 @@ def spin_wheel(
     from app.services import wheel as wheel_service
 
     try:
-        return wheel_service.spin(db, user, body.wheel_id, body.count, body.all_in)
+        res = wheel_service.spin(db, user, body.wheel_id, body.count, body.all_in)
+        db.commit()
+        return res
     except wheel_service.WheelError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
 
 
 @router.get("/wheels/history")

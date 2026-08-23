@@ -14,6 +14,12 @@ os.environ["MINIAPP_URL"] = "https://example.test/app"
 os.environ["ADMIN_SESSION_SECRET"] = "test-session-secret"
 os.environ["ADMIN_DEFAULT_USERNAME"] = "admin"
 os.environ["ADMIN_DEFAULT_PASSWORD"] = "test-password-123"
+os.environ["DEMO_GATE_PASSWORD"] = ""
+os.environ["GOOGLE_SHEET_ID"] = ""
+os.environ["GOOGLE_CREDENTIALS_FILE"] = ""
+
+from app.config import get_settings  # noqa: E402
+get_settings.cache_clear()
 
 from app.db import Base, SessionLocal, engine  # noqa: E402
 from app.models import Club, User  # noqa: E402
@@ -48,3 +54,25 @@ def user(db):
     db.add(row)
     db.commit()
     return row
+
+
+@pytest.fixture
+def client(db):
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    return TestClient(app)
+
+
+@pytest.fixture
+def settings_patch(monkeypatch):
+    """Правка настроек с гарантированным восстановлением: get_settings() — синглтон."""
+    s = get_settings()
+
+    def _patch(**kwargs):
+        for key, value in kwargs.items():
+            monkeypatch.setattr(s, key, value)
+
+    return _patch
+
+

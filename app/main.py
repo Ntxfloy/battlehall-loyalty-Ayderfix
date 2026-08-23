@@ -11,10 +11,11 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api import admin, console, desk, manage, miniapp, webhooks
-from app.config import get_settings
-from app.db import init_db
+from app.config import get_settings, is_placeholder_secret, is_production
+from app.db import SessionLocal, init_db
+from app.services import clubs as clubs_service
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -25,8 +26,20 @@ STATIC_DIR = BASE_DIR / "static"
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+
     init_db()
+    with SessionLocal() as db:
+        weak_clubs = [
+            c for c in clubs_service.list_clubs(db)
+            if c.is_active and is_placeholder_secret(c.oasys_webhook_token)
+        ]
+        for c in weak_clubs:
+            logger.error(
+                "Вебхуки активного клуба %s отключены: токен отсутствует или короче 32 символов. Выполните ротацию в панели.",
+                c.slug,
+            )
     yield
+
 
 
 app = FastAPI(
@@ -128,12 +141,17 @@ if settings.app_env == "dev":
         return response
 
 
+from app.config import get_settings, is_production
+
 app.include_router(miniapp.router)
 app.include_router(webhooks.router)
 app.include_router(admin.router)
 app.include_router(console.router)
+if not is_production():
+    app.include_router(console.test_router)
 app.include_router(desk.router)
 app.include_router(manage.router)
+
 
 
 @app.get("/health", tags=["service"])

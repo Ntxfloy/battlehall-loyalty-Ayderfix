@@ -70,7 +70,7 @@ def update_achievement(db: Session, achievement_id: int, data: dict) -> Achievem
     # определяется наличием обработчика в коде, а не галочкой в панели.
 
     db.add(row)
-    db.commit()
+    db.flush()
     return row
 
 
@@ -116,7 +116,7 @@ def create_reward(db: Session, data: dict) -> Reward:
     if row.cost_pts < 0:
         raise CatalogError("Стоимость не может быть отрицательной")
     db.add(row)
-    db.commit()
+    db.flush()
     return row
 
 
@@ -140,7 +140,7 @@ def update_reward(db: Session, reward_id: int, data: dict) -> Reward:
         raise CatalogError("Стоимость не может быть отрицательной")
 
     db.add(row)
-    db.commit()
+    db.flush()
     return row
 
 
@@ -152,7 +152,8 @@ def delete_reward(db: Session, reward_id: int) -> None:
         raise CatalogError("Награда не найдена")
     row.is_active = False
     db.add(row)
-    db.commit()
+    db.flush()
+
 
 
 # --- ЛУДЛЕНТА ---
@@ -210,7 +211,7 @@ def create_wheel(db: Session, data: dict) -> Wheel:
     if row.cost_pts <= 0:
         raise CatalogError("Прокрутка должна что-то стоить")
     db.add(row)
-    db.commit()
+    db.flush()
     return row
 
 
@@ -232,7 +233,7 @@ def update_wheel(db: Session, wheel_id: int, data: dict) -> Wheel:
         raise CatalogError("Прокрутка должна что-то стоить")
 
     db.add(row)
-    db.commit()
+    db.flush()
     return row
 
 
@@ -263,7 +264,7 @@ def create_prize(db: Session, wheel_id: int, data: dict) -> WheelPrize:
         is_active=bool(data.get("is_active", True)),
     )
     db.add(row)
-    db.commit()
+    db.flush()
     return row
 
 
@@ -292,7 +293,7 @@ def update_prize(db: Session, prize_id: int, data: dict) -> WheelPrize:
         row.is_active = bool(data["is_active"])
 
     db.add(row)
-    db.commit()
+    db.flush()
     return row
 
 
@@ -304,4 +305,5 @@ def delete_prize(db: Session, prize_id: int) -> None:
     # ячейки не ломает прошлые записи.
     row.is_active = False
     db.add(row)
-    db.commit()
+    db.flush()
+

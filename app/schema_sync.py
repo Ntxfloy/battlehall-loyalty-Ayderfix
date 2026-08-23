@@ -76,6 +76,23 @@ def sync_sqlite_columns(engine: Engine) -> list[str]:
                 connection.execute(text(ddl))
                 applied.append(f"{table.name}.{column.name}")
 
-    if applied:
-        logger.info("Схема досинхронизирована, добавлены колонки: %s", ", ".join(applied))
-    return applied
+def backfill_wheel_prize_reasons(engine: Engine) -> int:
+    """Исправляет исторические транзакции выигрышей ленты: reason='achievement' -> 'wheel_prize'."""
+    inspector = inspect(engine)
+    if "pts_transactions" not in inspector.get_table_names():
+        return 0
+
+    with engine.begin() as connection:
+        result = connection.execute(
+            text(
+                "UPDATE pts_transactions "
+                "SET reason = 'wheel_prize' "
+                "WHERE reason = 'achievement' AND ref_type = 'wheel_prize'"
+            )
+        )
+        updated = result.rowcount if result.rowcount is not None else 0
+
+    if updated > 0:
+        logger.info("Бэкфилл выигрышей ленты: обновлено строк: %d", updated)
+    return updated
+

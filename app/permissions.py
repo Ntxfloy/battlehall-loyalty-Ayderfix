@@ -78,17 +78,35 @@ def parse(raw: str | None) -> set[str]:
     return {p for p in data if p in ALL_PERMISSIONS}
 
 
-def dump(permissions) -> str:
-    """Отбрасывает неизвестные и owner-only права — на них нельзя положиться
-    как на валидные, даже если они пришли из запроса."""
-    clean = sorted({p for p in permissions if p in ALL_PERMISSIONS and p not in OWNER_ONLY})
+def validate_assignable(codes: list[str], *, target_is_owner: bool = False) -> list[str]:
+    """Единственная точка проверки набора прав перед записью в БД.
+
+    Неизвестное право — ошибка (неизвестное право не сохраняется молча).
+    Права OWNER_ONLY отбрасываются для сотрудников, чтобы сотрудник не смог
+    выдать себе права владельца.
+    """
+    unknown = [c for c in codes if c not in ALL_PERMISSIONS]
+    if unknown:
+        raise ValueError(f"Неизвестные права: {', '.join(sorted(unknown))}")
+
+    clean = [c for c in codes if c in ALL_PERMISSIONS]
+    if not target_is_owner:
+        clean = [c for c in clean if c not in OWNER_ONLY]
+    return sorted(set(clean))
+
+
+
+def dump(permissions, target_is_owner: bool = False) -> str:
+    clean = validate_assignable(list(permissions), target_is_owner=target_is_owner)
     return json.dumps(clean)
+
 
 
 def granted(admin: AdminUser) -> set[str]:
     if admin.role == AdminRole.OWNER:
         return set(ALL_PERMISSIONS)
-    return parse(admin.permissions)
+    return parse(admin.permissions) - OWNER_ONLY
+
 
 
 def has(admin: AdminUser, permission: str) -> bool:

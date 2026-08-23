@@ -10,12 +10,13 @@ import hashlib
 import hmac
 import secrets
 import time
+from typing import NamedTuple
 
 from fastapi import Depends, Header, HTTPException, Request, status
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.config import get_settings
+from app import permissions as perms
+from app.config import get_settings, is_placeholder_secret, is_production, secrets_match
 from app.db import get_db
 from app.models import AdminUser
 
@@ -25,7 +26,16 @@ SESSION_COOKIE = "bh_admin_session"
 _PBKDF2_ITERATIONS = 310_000
 
 
+class Caller(NamedTuple):
+    """Кто выполняет действие. label уходит в журнал."""
+
+    label: str
+    admin: AdminUser | None
+    is_service: bool
+
+
 # --- пароли ---
+
 
 def hash_password(password: str) -> str:
     salt = secrets.token_hex(16)
@@ -85,13 +95,22 @@ def current_admin_user(request: Request, db: Session = Depends(get_db)) -> Admin
     return admin
 
 
+def _service_token_valid(provided: str | None) -> bool:
+    return secrets_match(provided, settings.admin_token)
+
+
+
+def forbid_in_production() -> None:
+    """404, а не 403: наличие тестовых ручек в проде не подтверждаем."""
+    if is_production():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+
+
 def require_permission(permission: str):
     """Фабрика зависимости: пускает владельца всегда, сотрудника — только
     если владелец выдал ему это право."""
 
     def dependency(admin: AdminUser = Depends(current_admin_user)) -> AdminUser:
-        from app import permissions as perms
-
         if not perms.has(admin, permission):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -102,22 +121,52 @@ def require_permission(permission: str):
     return dependency
 
 
-def require_admin(
-    request: Request,
-    x_admin_token: str | None = Header(default=None),
-    db: Session = Depends(get_db),
-) -> str:
-    """Мягкая проверка для существующих служебных ручек /api/admin/*:
-    пускает либо по сервисному токену (скрипты), либо по куке панели (браузер).
-    Возвращает идентификатор вызывающего — для журнала действий."""
-    if x_admin_token and hmac.compare_digest(x_admin_token, settings.admin_token):
-        return "service-token"
+def require_admin_permission(permission: str, *, allow_service_token: bool = True):
+    """Для служебных ручек /api/admin/*.
 
-    raw = request.cookies.get(SESSION_COOKIE)
-    admin_id = read_session_value(raw) if raw else None
-    if admin_id is not None:
+    allow_service_token=False обязателен для всего, что двигает деньги или критичные права:
+    один статический токен на всех не даёт атрибуции в журнале.
+    """
+
+    def dependency(
+        request: Request,
+        x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
+        db: Session = Depends(get_db),
+    ) -> Caller:
+        if x_admin_token is not None and x_admin_token.strip():
+            if not allow_service_token:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Эта операция выполняется только под учётной записью администратора",
+                )
+            if not _service_token_valid(x_admin_token):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Неверный или небезопасный сервисный токен",
+                )
+            return Caller("service-token", None, True)
+
+        raw = request.cookies.get(SESSION_COOKIE)
+        admin_id = read_session_value(raw) if raw else None
+        if admin_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Нужен вход в админку",
+            )
+
         admin = db.get(AdminUser, admin_id)
-        if admin is not None and admin.is_active:
-            return admin.username
+        if admin is None or not admin.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Учётка отключена или не существует",
+            )
 
-    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Нужен токен или вход в админку")
+        if not perms.has(admin, permission):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Нет доступа: {perms.LABELS.get(permission, permission)}",
+            )
+
+        return Caller(admin.username, admin, False)
+
+    return dependency

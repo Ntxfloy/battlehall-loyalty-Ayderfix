@@ -16,7 +16,7 @@ from sqlalchemy import select
 
 from app.achievements_defs import ACHIEVEMENTS, DAILY_CHECKIN_CODE
 from app.admin_auth import hash_password
-from app.config import get_settings
+from app.config import get_settings, is_placeholder_secret
 from app.db import SessionLocal, init_db
 from app.models import (
     AchievementDef,
@@ -146,19 +146,30 @@ def seed_rewards(db, force: bool) -> tuple[int, int]:
     return created, updated
 
 
-def seed_default_club(db) -> Club | None:
-    """Создаёт клуб "main" из значений .env — только если в базе ещё нет
-    ни одного клуба. Дальше клубы заводятся из панели, а не отсюда."""
+def seed_default_club(db) -> tuple[Club | None, bool]:
+    """Создаёт клуб "main" — только если в базе ещё нет
+    ни одного клуба. Если OASYS_WEBHOOK_TOKEN не задан или слаб,
+    генерирует надежный 40-символьный токен."""
+    from app.services import clubs as clubs_svc
+
     exists = db.execute(select(Club.id)).first()
     if exists:
-        return None
+        return None, False
+
+    generated = is_placeholder_secret(settings.oasys_webhook_token)
+    token = (
+        clubs_svc.generate_token()
+        if generated
+        else settings.oasys_webhook_token.strip()
+    )
+
     club = Club(
         slug="main",
         name="BATTLEHALL",
-        oasys_webhook_token=settings.oasys_webhook_token,
+        oasys_webhook_token=token,
     )
     db.add(club)
-    return club
+    return club, generated
 
 
 def ensure_owner(db) -> AdminUser | None:
@@ -246,7 +257,7 @@ def main() -> None:
     with SessionLocal() as db:
         a_created, a_updated = seed_achievements(db, force)
         r_created, r_updated = seed_rewards(db, force)
-        club = seed_default_club(db)
+        club, club_token_generated = seed_default_club(db)
         admin = seed_default_admin(db)
         promoted = ensure_owner(db)
         wheel = seed_default_wheel(db)
@@ -255,7 +266,14 @@ def main() -> None:
     print(f"Достижения: добавлено {a_created}, обновлено {a_updated}")
     print(f"Награды:    добавлено {r_created}, обновлено {r_updated}")
     if club:
-        print(f"Клуб по умолчанию создан: slug=main, токен вебхука = OASYS_WEBHOOK_TOKEN из .env")
+        if club_token_generated:
+            print(
+                "Клуб main создан с автоматически сгенерированным токеном. "
+                "Для подключения OASys войдите в панель и выполните ротацию "
+                "токена: новый токен будет показан один раз."
+            )
+        else:
+            print("Клуб main создан с токеном OASYS_WEBHOOK_TOKEN из окружения.")
     if admin:
         print(
             f"Владелец создан: логин «{settings.admin_default_username}», "

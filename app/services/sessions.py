@@ -121,7 +121,6 @@ def start_session(db: Session, club: Club, payload) -> tuple[GameSession, bool]:
 
     row = _new_session(db, user, club, payload)
     achievements.on_session_started(db, user, row)
-    db.commit()
     return row, True
 
 
@@ -163,8 +162,8 @@ def end_session(db: Session, club: Club, payload) -> tuple[GameSession, bool]:
 
     referrals.on_session_closed(db, user)
 
-    db.commit()
     return row, True
+
 
 
 # --- статистика для гостя ---

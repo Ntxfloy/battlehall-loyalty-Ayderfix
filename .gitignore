@@ -14,3 +14,8 @@ secrets/*.json
 # IDE
 .idea/
 .vscode/
+
+# Reports & scratch
+.reports/
+scratch/
+

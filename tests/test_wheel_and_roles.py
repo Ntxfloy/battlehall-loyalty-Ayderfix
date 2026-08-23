@@ -275,6 +275,7 @@ def test_duplicate_admin_username_rejected(db):
 
 def test_staff_cannot_reach_owner_only_endpoints(client, db):
     admins_service.create(db, "deskuser", "password123", permissions=[perms.CODES_VIEW, perms.CODES_SUBMIT])
+    db.commit()
     _login(client, "deskuser", "password123")
 
     assert client.get("/api/console/admins").status_code == 403
@@ -284,6 +285,7 @@ def test_staff_cannot_reach_owner_only_endpoints(client, db):
 
 def test_staff_can_reach_its_own_desk(client, db, user):
     admins_service.create(db, "deskuser", "password123", permissions=[perms.CODES_VIEW, perms.CODES_SUBMIT])
+    db.commit()
     _login(client, "deskuser", "password123")
 
     assert client.get("/api/console/desk/search?q=нет-такого").status_code == 200
@@ -291,9 +293,11 @@ def test_staff_can_reach_its_own_desk(client, db, user):
 
 def test_staff_cannot_approve(client, db, user):
     admins_service.create(db, "deskuser", "password123", permissions=[perms.CODES_VIEW, perms.CODES_SUBMIT])
+    db.commit()
     _login(client, "deskuser", "password123")
 
     assert client.post("/api/console/desk/approve", json={"code": "ANYCODE"}).status_code == 403
+
 
 
 # --- поток «внёс код -> аппрув владельца» ---
@@ -302,14 +306,18 @@ def _make_code(db, user) -> str:
     pts.credit(db, user, 5000, comment="тест")
     db.commit()
     reward = db.query(Reward).filter(Reward.code == "cash_300").one()
-    return rewards.redeem(db, user, reward.id).code
+    code = rewards.redeem(db, user, reward.id).code
+    db.commit()
+    return code
 
 
 def test_submitted_code_waits_for_approval(client, db, user):
     code = _make_code(db, user)
     admins_service.create(db, "deskuser", "password123", permissions=[perms.CODES_VIEW, perms.CODES_SUBMIT])
+    db.commit()
 
     _login(client, "deskuser", "password123")
+
     submitted = client.post("/api/console/desk/submit", json={"code": code})
     assert submitted.status_code == 200
     assert submitted.json()["status"] == RedemptionStatus.SUBMITTED
@@ -445,16 +453,38 @@ def test_free_wheel_is_rejected(client, db):
 
 def test_manual_pts_grant_and_deduction(client, db, user):
     _login(client)
-    client.post(f"/api/console/users/{user.telegram_id}/pts?amount=500&comment=бонус")
+    client.post(f"/api/console/users/{user.telegram_id}/pts", json={"amount": 500, "comment": "бонус"})
     db.refresh(user)
     assert user.pts_balance == 500
 
-    client.post(f"/api/console/users/{user.telegram_id}/pts?amount=-200&comment=правка")
+    client.post(f"/api/console/users/{user.telegram_id}/pts", json={"amount": -200, "comment": "правка"})
     db.refresh(user)
     assert user.pts_balance == 300
 
 
 def test_cannot_deduct_more_than_balance(client, db, user):
     _login(client)
-    response = client.post(f"/api/console/users/{user.telegram_id}/pts?amount=-100&comment=минус")
+    response = client.post(f"/api/console/users/{user.telegram_id}/pts", json={"amount": -100, "comment": "минус"})
     assert response.status_code == 400
+
+
+def test_granted_strips_owner_only_from_raw_db_row(db):
+    from app import permissions as perms
+    from app.models import AdminRole, AdminUser
+
+    staff = AdminUser(
+        username="desk_raw", password_hash="x", role=AdminRole.STAFF,
+        permissions='["codes.view", "codes.approve", "admins.manage"]',
+    )
+    assert perms.granted(staff) == {"codes.view"}
+    assert not perms.has(staff, perms.CODES_APPROVE)
+
+
+def test_owner_keeps_owner_only():
+    from app import permissions as perms
+    from app.models import AdminRole, AdminUser
+
+    owner = AdminUser(username="own", password_hash="x", role=AdminRole.OWNER, permissions="[]")
+    assert perms.CODES_APPROVE in perms.granted(owner)
+
+

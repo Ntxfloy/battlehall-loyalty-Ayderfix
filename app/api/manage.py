@@ -12,12 +12,14 @@ from app import permissions as perms
 from app.admin_auth import current_admin_user, require_permission, verify_password
 from app.config import get_settings
 from app.db import get_db
-from app.models import AdminUser, User
+from app.models import AdminUser, TxReason, User
 from app.schemas import (
+
     AchievementUpdateRequest,
     AdminCreateRequest,
     AdminPasswordRequest,
     AdminUpdateRequest,
+    ManualPtsRequest,
     PrizeRequest,
     PrizeUpdateRequest,
     RewardCreateRequest,
@@ -365,33 +367,32 @@ def delete_prize(
 @router.post("/users/{telegram_id}/pts")
 def grant_pts(
     telegram_id: int,
-    amount: int,
-    comment: str = "Ручное начисление",
+    body: ManualPtsRequest,
     admin: AdminUser = Depends(require_permission(perms.PTS_GRANT)),
     db: Session = Depends(get_db),
 ) -> dict:
-    """Начисление и списание одной ручкой: отрицательная сумма — списание."""
+    """Начисление и списание одной ручкой через тело запроса: отрицательная сумма — списание."""
     from app.services import achievements, pts
 
     user = db.query(User).filter(User.telegram_id == telegram_id).one_or_none()
     if user is None:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
-    if amount == 0:
-        raise HTTPException(status_code=400, detail="Сумма не может быть нулевой")
 
     try:
-        if amount > 0:
-            pts.credit(db, user, amount, reason="manual", comment=comment)
+        if body.amount > 0:
+            pts.credit(db, user, body.amount, reason=TxReason.MANUAL, comment=body.comment)
         else:
-            pts.debit(db, user, -amount, reason="manual", comment=comment)
+            pts.debit(db, user, -body.amount, reason=TxReason.MANUAL, comment=body.comment)
+
     except pts.InsufficientFunds as exc:
         raise HTTPException(status_code=400, detail=f"Недостаточно PTS: {exc}") from exc
 
     achievements.on_pts_changed(db, user)
     audit.log(db, admin.username, "pts_grant", target_type="user", target_id=str(telegram_id),
-              detail={"amount": amount, "comment": comment})
+              detail={"amount": body.amount, "comment": body.comment})
     db.commit()
     return {"ok": True, "balance": user.pts_balance}
+
 
 
 # ============================================================

@@ -2,9 +2,10 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.models import RedemptionStatus, Reward, User
+from app.models import RedemptionStatus, Reward, TxReason, User
 from app.schemas import SessionEndPayload, SessionStartPayload
 from app.services import achievements, pts, referrals, rewards, sessions
+
 
 
 def _start(db, club, user, pc, when, session_id, minutes=None):
@@ -159,9 +160,10 @@ def test_night_session_counts_to_previous_game_day(db, club, user):
 
 
 def test_cumulative_pts_achievement_tracks_earnings(db, user):
-    pts.credit(db, user, 5000, comment="тест")
+    pts.credit(db, user, 5000, reason=TxReason.ACHIEVEMENT, comment="тест")
     achievements.on_pts_changed(db, user)
     db.commit()
+
 
     item = _item(db, user, "special_pts_5000")
     assert item["is_completed"] is True

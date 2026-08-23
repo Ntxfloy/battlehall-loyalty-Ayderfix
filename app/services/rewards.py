@@ -5,10 +5,11 @@
 в гугл-таблицу компенсаций.
 """
 
+import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -16,7 +17,9 @@ from app.models import RedemptionStatus, Reward, RewardRedemption, TxReason, Use
 from app.periods import ensure_utc
 from app.services import achievements, pts
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
+
 
 # Без 0/O/1/I — код читают вслух и вбивают руками на стойке
 _CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -70,8 +73,8 @@ def redeem(db: Session, user: User, reward_id: int) -> RewardRedemption:
         raise RewardError(f"Не хватает PTS: {exc}") from exc
 
     redemption = issue_code(db, user, reward, pts_spent=reward.cost_pts)
-    db.commit()
     return redemption
+
 
 
 def issue_code(
@@ -105,12 +108,14 @@ def issue_code(
 
 
 def active_redemption(db: Session, user: User) -> RewardRedemption | None:
-    expire_due(db, user_id=user.id)
+
+    now = datetime.now(timezone.utc)
     return db.execute(
         select(RewardRedemption)
         .where(
             RewardRedemption.user_id == user.id,
             RewardRedemption.status == RedemptionStatus.PENDING,
+            RewardRedemption.expires_at > now,
         )
         .order_by(RewardRedemption.created_at.desc())
     ).scalars().first()
@@ -127,62 +132,155 @@ def history(db: Session, user: User, limit: int = 50) -> list[RewardRedemption]:
     )
 
 
-def expire_due(db: Session, user_id: int | None = None) -> int:
-    """Гасит просроченные коды. Если REFUND_PTS_ON_EXPIRE — возвращает PTS.
+def effective_status(row: RewardRedemption, now: datetime | None = None) -> str:
+    """Для показа гостю и админу: просроченный pending показывается как expired,
+    даже если регламентный фоновый прогон ещё не прошёл. Базу не мутирует."""
+    if now is None:
+        now = datetime.now(timezone.utc)
+    if row.status == RedemptionStatus.PENDING and row.expires_at and ensure_utc(row.expires_at) <= now:
+        return RedemptionStatus.EXPIRED
+    return row.status
 
-    Вызывается лениво при каждом обращении к наградам, поэтому отдельный
-    планировщик для MVP не нужен.
+
+def _conflict_message(row: RewardRedemption) -> str:
+    status = effective_status(row)
+    if status == RedemptionStatus.APPROVED:
+        return "Код уже подтверждён другим администратором"
+    if status == RedemptionStatus.SUBMITTED:
+        used = ensure_utc(row.used_at)
+        used_str = f"{used:%d.%m.%Y %H:%M}" if used else "ранее"
+        return f"Код уже внесён {used_str} ({row.used_by or 'сотрудником'})"
+    if status == RedemptionStatus.EXPIRED:
+        return "Срок действия кода истёк"
+    if status == RedemptionStatus.CANCELLED:
+        return "Код отменён"
+    return "Код уже обработан в другой сессии"
+
+
+def expire_due(db: Session, *, user_id: int | None = None, limit: int = 200) -> int:
+    """Гасит просроченные коды и возвращает PTS, если это включено настройкой.
+
+    Идемпотентна: право на возврат выигрывается условным UPDATE по статусу,
+    поэтому параллельные вызовы (cron, ручка обслуживания) не могут
+    начислить возврат дважды.
+
+    Не коммитит: транзакцией управляет вызывающий код, чтобы погашение
+    и запись в журнал попали в один коммит.
     """
     now = datetime.now(timezone.utc)
-    stmt = select(RewardRedemption).where(
-        RewardRedemption.status == RedemptionStatus.PENDING,
-        RewardRedemption.expires_at <= now,
+    settings = get_settings()
+
+    stmt = (
+        select(RewardRedemption)
+        .where(
+            RewardRedemption.status == RedemptionStatus.PENDING,
+            RewardRedemption.expires_at.isnot(None),
+            RewardRedemption.expires_at <= now,
+        )
+        .order_by(RewardRedemption.expires_at.asc())
+        .limit(limit)
     )
     if user_id is not None:
         stmt = stmt.where(RewardRedemption.user_id == user_id)
 
-    rows = list(db.execute(stmt).scalars())
-    for row in rows:
-        row.status = RedemptionStatus.EXPIRED
-        db.add(row)
-        if settings.refund_pts_on_expire:
-            user = db.get(User, row.user_id)
-            if user is not None:
-                pts.credit(
-                    db,
-                    user,
-                    row.pts_spent,
-                    reason=TxReason.REWARD_REFUND,
-                    ref_type="redemption",
-                    ref_id=row.code,
-                    comment=f"Возврат за сгоревший код {row.code}",
-                )
-    if rows:
-        db.commit()
-    return len(rows)
+    candidates = list(db.execute(stmt).scalars())
+
+    expired = 0
+    for row in candidates:
+        # Гасим строку условно: WHERE status = 'pending' отсекает второго
+        # претендента на эту же строку без блокировок и без SELECT FOR UPDATE.
+        result = db.execute(
+            update(RewardRedemption)
+            .where(
+                RewardRedemption.id == row.id,
+                RewardRedemption.status == RedemptionStatus.PENDING,
+            )
+            .values(status=RedemptionStatus.EXPIRED, expired_at=now)
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            # Кто-то другой уже погасил эту строку — возврат делает он.
+            continue
+
+        expired += 1
+
+        if not settings.refund_pts_on_expire or row.pts_spent <= 0:
+            continue
+
+        # Второй барьер: возврат отмечается тем же приёмом. Даже если
+        # погашение и возврат разъедутся по времени, второго начисления не будет.
+        refund_marked = db.execute(
+            update(RewardRedemption)
+            .where(
+                RewardRedemption.id == row.id,
+                RewardRedemption.refunded_at.is_(None),
+            )
+            .values(refunded_at=now)
+            .execution_options(synchronize_session=False)
+        )
+        if refund_marked.rowcount != 1:
+            continue
+
+        user = db.get(User, row.user_id)
+        if user is None:
+            logger.error(
+                "Код %s истёк, но гость %s не найден: возврат PTS не выполнен",
+                row.code,
+                row.user_id,
+            )
+            continue
+
+        pts.credit(
+            db,
+            user,
+            row.pts_spent,
+            reason=TxReason.REWARD_REFUND,
+            ref_type="redemption",
+            ref_id=row.code,
+            comment=f"Возврат за сгоревший код {row.code}",
+        )
+
+    return expired
 
 
 def use_code(db: Session, code: str, admin: str) -> RewardRedemption:
     """Сотрудник вносит код на стойке. Код уходит в статус «ждёт подтверждения»:
-    начисление гостю подтверждает владелец, сотрудник сам себя не аппрувит."""
+    начисление гостю подтверждает владелец, сотрудник сам себя не аппрувит.
+
+    Переход захватывается условным UPDATE: параллельный expire_due может
+    погасить эту же строку и вернуть PTS, и тогда вносить код уже нельзя.
+    """
+    normalized = code.strip().upper()
     row = db.execute(
-        select(RewardRedemption).where(RewardRedemption.code == code.strip().upper())
+        select(RewardRedemption).where(RewardRedemption.code == normalized)
     ).scalar_one_or_none()
     if row is None:
         raise RewardError("Код не найден")
-    if row.status in (RedemptionStatus.SUBMITTED, RedemptionStatus.APPROVED):
-        used = ensure_utc(row.used_at)
-        raise RewardError(f"Код уже внесён {used:%d.%m.%Y %H:%M} ({row.used_by})")
-    if row.status == RedemptionStatus.EXPIRED or ensure_utc(row.expires_at) <= datetime.now(timezone.utc):
-        raise RewardError("Срок действия кода истёк")
-    if row.status == RedemptionStatus.CANCELLED:
-        raise RewardError("Код отменён")
 
-    row.status = RedemptionStatus.SUBMITTED
-    row.used_at = datetime.now(timezone.utc)
-    row.used_by = admin
-    db.add(row)
-    db.commit()
+    if row.status != RedemptionStatus.PENDING:
+        raise RewardError(_conflict_message(row))
+
+    now = datetime.now(timezone.utc)
+
+    # Единственный переход pending -> submitted, и только пока код не просрочен.
+    # WHERE status='pending' отсекает гонку с expire_due: если возврат PTS уже
+    # прошёл, rowcount будет 0 и мы не выдадим награду второй раз.
+    result = db.execute(
+        update(RewardRedemption)
+        .where(
+            RewardRedemption.id == row.id,
+            RewardRedemption.status == RedemptionStatus.PENDING,
+            RewardRedemption.expires_at > now,
+        )
+        .values(status=RedemptionStatus.SUBMITTED, used_at=now, used_by=admin)
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount != 1:
+        db.expire(row)
+        fresh = lookup(db, code)
+        raise RewardError(_conflict_message(fresh or row))
+
+    db.refresh(row)
     return row
 
 
@@ -197,11 +295,22 @@ def approve_code(db: Session, code: str, admin: str) -> RewardRedemption:
     if row.status != RedemptionStatus.SUBMITTED:
         raise RewardError("Подтверждать можно только внесённый на стойке код")
 
-    row.status = RedemptionStatus.APPROVED
-    row.approved_at = datetime.now(timezone.utc)
-    row.approved_by = admin
-    db.add(row)
-    db.commit()
+    now = datetime.now(timezone.utc)
+    result = db.execute(
+        update(RewardRedemption)
+        .where(
+            RewardRedemption.id == row.id,
+            RewardRedemption.status == RedemptionStatus.SUBMITTED,
+        )
+        .values(status=RedemptionStatus.APPROVED, approved_at=now, approved_by=admin)
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount != 1:
+        db.expire(row)
+        fresh = lookup(db, code)
+        raise RewardError(_conflict_message(fresh or row))
+
+    db.refresh(row)
     return row
 
 
@@ -214,13 +323,35 @@ def reject_code(db: Session, code: str, admin: str) -> RewardRedemption:
     if row.status != RedemptionStatus.SUBMITTED:
         raise RewardError("Отклонить можно только внесённый на стойке код")
 
-    still_valid = ensure_utc(row.expires_at) > datetime.now(timezone.utc)
-    row.status = RedemptionStatus.PENDING if still_valid else RedemptionStatus.EXPIRED
-    row.used_at = None
-    row.used_by = None
-    db.add(row)
-    db.commit()
+    now = datetime.now(timezone.utc)
+    still_valid = ensure_utc(row.expires_at) > now
+    new_status = RedemptionStatus.PENDING if still_valid else RedemptionStatus.EXPIRED
+    result = db.execute(
+        update(RewardRedemption)
+        .where(
+            RewardRedemption.id == row.id,
+            RewardRedemption.status == RedemptionStatus.SUBMITTED,
+        )
+        .values(
+            status=new_status,
+            used_at=None,
+            used_by=None,
+            expired_at=now if not still_valid else None,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount != 1:
+        db.expire(row)
+        fresh = lookup(db, code)
+        raise RewardError(_conflict_message(fresh or row))
+
+    db.refresh(row)
     return row
+
+
+
+
+
 
 
 def pending_approval(db: Session, limit: int = 200) -> list[RewardRedemption]:
@@ -244,4 +375,4 @@ def grant_pts(db: Session, user: User, amount: int, comment: str) -> None:
     """Ручное начисление PTS админом (компенсации, акции)."""
     pts.credit(db, user, amount, reason=TxReason.MANUAL, comment=comment)
     achievements.on_pts_changed(db, user)
-    db.commit()
+

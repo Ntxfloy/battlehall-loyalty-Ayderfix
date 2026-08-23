@@ -114,12 +114,13 @@ def _resolve_one(db: Session, user: User, wheel: Wheel, pool: list[WheelPrize]) 
             db,
             user,
             winner.pts_amount,
-            reason=TxReason.ACHIEVEMENT,
+            reason=TxReason.WHEEL_PRIZE,
             ref_type="wheel_prize",
             ref_id=str(winner.id),
             comment=f"Выигрыш: {winner.title}",
         )
         spin_row.pts_won = winner.pts_amount
+
 
     elif winner.kind == PrizeKind.REWARD and winner.reward_id:
         reward = db.get(Reward, winner.reward_id)
@@ -191,9 +192,9 @@ def spin(db: Session, user: User, wheel_id: int, count: int = 1, all_in: bool = 
 
     spins = [_resolve_one(db, user, wheel, pool) for _ in range(count)]
     achievements.on_pts_changed(db, user)
-    db.commit()
 
     return {
+
         "balance": user.pts_balance,
         "cost_pts": total_cost,
         "count": count,

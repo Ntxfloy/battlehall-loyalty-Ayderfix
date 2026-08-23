@@ -13,10 +13,11 @@ from app.admin_auth import (
     SESSION_COOKIE,
     create_session_value,
     current_admin_user,
+    forbid_in_production,
     require_permission,
     verify_password,
 )
-from app.config import get_settings
+from app.config import get_settings, is_local_env
 from app.db import get_db
 from app.loyalty import group_for_hours
 from app.models import AdminUser, Club, GameSession, PtsTransaction, RewardRedemption, User
@@ -56,10 +57,11 @@ def login(body: AdminLoginRequest, response: Response, db: Session = Depends(get
         create_session_value(admin.id),
         httponly=True,
         samesite="lax",
-        secure=settings.app_env != "dev",
+        secure=not is_local_env(),
         max_age=settings.admin_session_ttl_hours * 3600,
     )
     return {"ok": True, "username": admin.username, "display_name": admin.display_name}
+
 
 
 @router.post("/auth/logout")
@@ -87,7 +89,9 @@ def me(admin: AdminUser = Depends(current_admin_user)) -> dict:
 # --- клубы ---
 
 @router.get("/clubs")
-def list_clubs(_: AdminUser = Depends(current_admin_user), db: Session = Depends(get_db)) -> dict:
+def list_clubs(_: AdminUser = Depends(require_permission(perms.CLUBS_EDIT)), db: Session = Depends(get_db)) -> dict:
+    from app.config import is_placeholder_secret
+
     return {
         "items": [
             {
@@ -95,17 +99,19 @@ def list_clubs(_: AdminUser = Depends(current_admin_user), db: Session = Depends
                 "slug": c.slug,
                 "name": c.name,
                 "is_active": c.is_active,
-                "webhook_token": c.oasys_webhook_token,
+                "webhook_configured": not is_placeholder_secret(c.oasys_webhook_token),
             }
             for c in clubs_service.list_clubs(db)
         ]
     }
 
 
+
+
 @router.post("/clubs")
 def create_club(
     body: ClubCreateRequest,
-    admin: AdminUser = Depends(current_admin_user),
+    admin: AdminUser = Depends(require_permission(perms.CLUBS_EDIT)),
     db: Session = Depends(get_db),
 ) -> dict:
     try:
@@ -121,7 +127,7 @@ def create_club(
 def update_club(
     club_id: int,
     body: ClubUpdateRequest,
-    admin: AdminUser = Depends(current_admin_user),
+    admin: AdminUser = Depends(require_permission(perms.CLUBS_EDIT)),
     db: Session = Depends(get_db),
 ) -> dict:
     club = db.get(Club, club_id)
@@ -137,7 +143,7 @@ def update_club(
 @router.post("/clubs/{club_id}/rotate-token")
 def rotate_token(
     club_id: int,
-    admin: AdminUser = Depends(current_admin_user),
+    admin: AdminUser = Depends(require_permission(perms.CLUBS_EDIT)),
     db: Session = Depends(get_db),
 ) -> dict:
     club = db.get(Club, club_id)
@@ -156,7 +162,7 @@ def list_users(
     q: str | None = Query(default=None, description="поиск по username/имени/телефону/telegram_id"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=30, ge=1, le=200),
-    _: AdminUser = Depends(current_admin_user),
+    _: AdminUser = Depends(require_permission(perms.USERS_VIEW)),
     db: Session = Depends(get_db),
 ) -> dict:
     from sqlalchemy import func, or_
@@ -205,9 +211,10 @@ def list_users(
 @router.get("/users/{telegram_id}")
 def user_detail(
     telegram_id: int,
-    _: AdminUser = Depends(current_admin_user),
+    _: AdminUser = Depends(require_permission(perms.USERS_VIEW)),
     db: Session = Depends(get_db),
 ) -> dict:
+
     user = db.execute(select(User).where(User.telegram_id == telegram_id)).scalar_one_or_none()
     if user is None:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
@@ -310,12 +317,14 @@ def oasys_discounts(_: AdminUser = Depends(require_permission(perms.OASYS_VIEW))
 
 # --- журнал действий ---
 
+# --- журнал действий ---
+
 @router.get("/logs")
 def logs(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
     action: str | None = None,
-    _: AdminUser = Depends(current_admin_user),
+    _: AdminUser = Depends(require_permission(perms.LOGS_VIEW)),
     db: Session = Depends(get_db),
 ) -> dict:
     rows = audit.recent(db, limit=page_size, offset=(page - 1) * page_size, action=action)
@@ -340,13 +349,20 @@ def logs(
 def reports(
     date_from: str | None = Query(default=None, description="YYYY-MM-DD, игровой день"),
     date_to: str | None = Query(default=None),
-    _: AdminUser = Depends(current_admin_user),
+    _: AdminUser = Depends(require_permission(perms.REPORTS_VIEW)),
     db: Session = Depends(get_db),
 ) -> dict:
     return clubs_service.network_summary(db, date_from, date_to)
 
 
 # --- тестовые запросы (симуляция вебхуков OASys прямо из панели) ---
+
+test_router = APIRouter(
+    prefix="/api/console/test",
+    tags=["console-test"],
+    dependencies=[Depends(forbid_in_production)],
+)
+
 
 def _ensure_test_user(db: Session, telegram_id: int) -> None:
     """Настоящий вебхук OASys молча пропускает гостя, которого ещё нет
@@ -360,10 +376,10 @@ def _ensure_test_user(db: Session, telegram_id: int) -> None:
         db.flush()
 
 
-@router.post("/test/session-start")
+@test_router.post("/session-start")
 def test_session_start(
     body: TestSessionStartRequest,
-    admin: AdminUser = Depends(current_admin_user),
+    admin: AdminUser = Depends(require_permission(perms.TEST_TOOLS)),
     db: Session = Depends(get_db),
 ) -> dict:
     club = clubs_service.get_by_slug(db, body.club_slug)
@@ -391,10 +407,10 @@ def test_session_start(
     return {"ok": True, "session_id": row.oasys_session_id, "created": created, "zone": row.zone_code}
 
 
-@router.post("/test/session-end")
+@test_router.post("/session-end")
 def test_session_end(
     body: TestSessionEndRequest,
-    admin: AdminUser = Depends(current_admin_user),
+    admin: AdminUser = Depends(require_permission(perms.TEST_TOOLS)),
     db: Session = Depends(get_db),
 ) -> dict:
     club = clubs_service.get_by_slug(db, body.club_slug)
@@ -421,3 +437,5 @@ def test_session_end(
               detail={"club": club.slug, "minutes": row.duration_minutes})
     db.commit()
     return {"ok": True, "session_id": row.oasys_session_id, "closed": closed, "minutes": row.duration_minutes}
+
+

@@ -10,7 +10,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.admin_auth import require_admin
+from app import permissions as perms
+from app.admin_auth import Caller, require_admin_permission
 from app.db import get_db
 from app.models import RedemptionStatus, RewardRedemption, User
 from app.periods import iso
@@ -21,7 +22,11 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
 @router.get("/redemptions/{code}")
-def lookup_code(code: str, _: str = Depends(require_admin), db: Session = Depends(get_db)) -> dict:
+def lookup_code(
+    code: str,
+    _: Caller = Depends(require_admin_permission(perms.CODES_VIEW)),
+    db: Session = Depends(get_db),
+) -> dict:
     """Что за код принёс гость: какая награда, кому принадлежит, жив ли."""
     row = rewards.lookup(db, code)
     if row is None:
@@ -29,8 +34,9 @@ def lookup_code(code: str, _: str = Depends(require_admin), db: Session = Depend
     user = db.get(User, row.user_id)
     return {
         "code": row.code,
-        "status": row.status,
+        "status": rewards.effective_status(row),
         "reward": row.reward_title,
+
         "payout_value": float(row.payout_value),
         "payout_unit": row.payout_unit,
         "pts_spent": row.pts_spent,
@@ -49,14 +55,14 @@ def lookup_code(code: str, _: str = Depends(require_admin), db: Session = Depend
 @router.post("/redemptions/use")
 def use_code(
     body: UseCodeRequest,
-    admin: str = Depends(require_admin),
+    caller: Caller = Depends(require_admin_permission(perms.CODES_SUBMIT)),
     db: Session = Depends(get_db),
 ) -> dict:
     try:
-        row = rewards.use_code(db, body.code, admin)
+        row = rewards.use_code(db, body.code, caller.label)
     except rewards.RewardError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    audit.log(db, admin, "redemption_use", target_type="redemption", target_id=row.code,
+    audit.log(db, caller.label, "redemption_use", target_type="redemption", target_id=row.code,
               detail={"reward": row.reward_title, "pts_spent": row.pts_spent})
     db.commit()
     return {"ok": True, "code": row.code, "reward": row.reward_title, "used_at": iso(row.used_at)}
@@ -66,7 +72,7 @@ def use_code(
 def list_redemptions(
     status: str = RedemptionStatus.APPROVED,
     only_new: bool = True,
-    _: str = Depends(require_admin),
+    _: Caller = Depends(require_admin_permission(perms.CODES_APPROVE)),
     db: Session = Depends(get_db),
 ) -> dict:
     """Выгрузка для гугл-таблицы компенсаций.
@@ -104,7 +110,7 @@ def list_redemptions(
 @router.post("/redemptions/mark-exported")
 def mark_exported(
     codes: list[str],
-    admin: str = Depends(require_admin),
+    caller: Caller = Depends(require_admin_permission(perms.CODES_APPROVE)),
     db: Session = Depends(get_db),
 ) -> dict:
     now = datetime.now(timezone.utc)
@@ -115,7 +121,7 @@ def mark_exported(
             row.exported_at = now
             db.add(row)
             updated += 1
-    audit.log(db, admin, "redemptions_mark_exported", detail={"count": updated})
+    audit.log(db, caller.label, "redemptions_mark_exported", detail={"count": updated})
     db.commit()
     return {"ok": True, "updated": updated}
 
@@ -123,24 +129,29 @@ def mark_exported(
 @router.post("/pts/grant")
 def grant_pts(
     body: GrantPtsRequest,
-    admin: str = Depends(require_admin),
+    caller: Caller = Depends(require_admin_permission(perms.PTS_GRANT, allow_service_token=False)),
     db: Session = Depends(get_db),
 ) -> dict:
     user = db.query(User).filter(User.telegram_id == body.telegram_id).one_or_none()
     if user is None:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
     rewards.grant_pts(db, user, body.amount, body.comment)
-    audit.log(db, admin, "pts_grant", target_type="user", target_id=str(user.telegram_id),
+    audit.log(db, caller.label, "pts_grant", target_type="user", target_id=str(user.telegram_id),
               detail={"amount": body.amount, "comment": body.comment})
     db.commit()
     return {"ok": True, "balance": user.pts_balance}
 
 
 @router.post("/maintenance/expire-codes")
-def expire_codes(admin: str = Depends(require_admin), db: Session = Depends(get_db)) -> dict:
+def expire_codes(
+    caller: Caller = Depends(require_admin_permission(perms.CODES_APPROVE)),
+    db: Session = Depends(get_db),
+) -> dict:
     """Обычно коды гасятся лениво при обращении к наградам.
     Эта ручка нужна, чтобы прогнать всех разом (например, из cron)."""
     count = rewards.expire_due(db)
-    audit.log(db, admin, "maintenance_expire_codes", detail={"count": count})
+    audit.log(db, caller.label, "maintenance_expire_codes", detail={"count": count})
     db.commit()
     return {"expired": count}
+
+

@@ -30,6 +30,8 @@ class TxReason:
     REWARD_REFUND = "reward_refund"      # возврат за сгоревший код
     TOPUP = "topup"                      # пополнение (TON, пост-MVP)
     MANUAL = "manual"                    # ручная правка админом
+    WHEEL_PRIZE = "wheel_prize"          # выигрыш в «ЛУДЛЕНТЕ» — не заработок
+
 
 
 class RedemptionStatus:
@@ -268,8 +270,12 @@ class RewardRedemption(Base):
     """Обмен PTS на награду: код живёт 24 часа и гасится админом на стойке."""
 
     __tablename__ = "reward_redemptions"
+    __table_args__ = (
+        Index("ix_redemptions_status_expires", "status", "expires_at"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     reward_id: Mapped[int] = mapped_column(ForeignKey("rewards.id"))
 
@@ -295,8 +301,18 @@ class RewardRedemption(Base):
     # отметка, что строка уехала в гугл-таблицу компенсаций
     exported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # Момент фактического погашения. Отличается от expires_at: тот показывает,
+    # когда код должен был сгореть, этот — когда регламентный прогон его закрыл.
+    expired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Момент возврата PTS за сгоревший код. Отдельно от статуса EXPIRED:
+    # код может истечь при refund_pts_on_expire=False, и тогда возврата нет.
+    refunded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     # Если код выпал из «ЛУДЛЕНТЫ», а не куплен напрямую
     source: Mapped[str] = mapped_column(String(16), default="catalog")
+
+
 
 
 class Wheel(Base):

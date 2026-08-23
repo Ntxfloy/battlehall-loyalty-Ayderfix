@@ -20,7 +20,6 @@ from app.models import RedemptionStatus, RewardRedemption, User
 from app.periods import ensure_utc
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
 
 # Права: только таблицы, ничего лишнего у сервисного аккаунта не просим.
 SCOPES = ("https://www.googleapis.com/auth/spreadsheets",)
@@ -46,7 +45,8 @@ class SheetsError(Exception):
 
 
 def is_configured() -> bool:
-    return bool(settings.google_sheet_id and settings.google_credentials_file)
+    s = get_settings()
+    return bool(s.google_sheet_id and s.google_credentials_file)
 
 
 def _worksheet():
@@ -56,8 +56,9 @@ def _worksheet():
         raise SheetsError("Google Sheets не настроен: нужны GOOGLE_SHEET_ID и GOOGLE_CREDENTIALS_FILE")
 
     import pathlib
+    s = get_settings()
 
-    key_path = pathlib.Path(settings.google_credentials_file)
+    key_path = pathlib.Path(s.google_credentials_file)
     if not key_path.exists():
         raise SheetsError(f"Файл ключа не найден: {key_path}")
 
@@ -70,11 +71,11 @@ def _worksheet():
     try:
         credentials = Credentials.from_service_account_file(str(key_path), scopes=list(SCOPES))
         client = gspread.authorize(credentials)
-        spreadsheet = client.open_by_key(settings.google_sheet_id)
+        spreadsheet = client.open_by_key(s.google_sheet_id)
     except Exception as exc:
         raise SheetsError(f"Не удалось открыть таблицу: {exc}") from exc
 
-    title = settings.google_sheet_worksheet
+    title = s.google_sheet_worksheet
     try:
         return spreadsheet.worksheet(title)
     except Exception:
@@ -153,7 +154,7 @@ def export_pending(db: Session) -> dict:
     for row in rows:
         row.exported_at = now
         db.add(row)
-    db.commit()
+    db.flush()
 
     logger.info("В Google Sheets выгружено строк: %s", len(rows))
     return {"exported": len(rows), "codes": [r.code for r in rows]}
@@ -176,5 +177,6 @@ def export_one(db: Session, redemption: RewardRedemption) -> bool:
 
     redemption.exported_at = datetime.now(timezone.utc)
     db.add(redemption)
-    db.commit()
+    db.flush()
     return True
+

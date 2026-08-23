@@ -30,13 +30,19 @@ def get_by_slug(db: Session, slug: str) -> Club | None:
     return db.execute(select(Club).where(Club.slug == slug)).scalar_one_or_none()
 
 
+from app.config import is_placeholder_secret
+
+
 def create(db: Session, slug: str, name: str, token: str | None = None) -> Club:
     if get_by_slug(db, slug) is not None:
         raise ClubError(f"Клуб с slug «{slug}» уже существует")
-    club = Club(slug=slug, name=name, oasys_webhook_token=token or generate_token())
+    if token is not None and is_placeholder_secret(token):
+        raise ClubError("Токен вебхука должен содержать не менее 32 символов")
+    club = Club(slug=slug, name=name, oasys_webhook_token=token.strip() if token else generate_token())
     db.add(club)
-    db.commit()
+    db.flush()
     return club
+
 
 
 def update(db: Session, club: Club, *, name: str | None = None, is_active: bool | None = None) -> Club:
@@ -45,15 +51,16 @@ def update(db: Session, club: Club, *, name: str | None = None, is_active: bool 
     if is_active is not None:
         club.is_active = is_active
     db.add(club)
-    db.commit()
+    db.flush()
     return club
 
 
 def rotate_token(db: Session, club: Club) -> Club:
     club.oasys_webhook_token = generate_token()
     db.add(club)
-    db.commit()
+    db.flush()
     return club
+
 
 
 # --- отчётность ---

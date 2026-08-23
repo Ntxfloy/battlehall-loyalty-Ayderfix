@@ -44,11 +44,13 @@ def _approved_code(client, db, user) -> str:
     db.commit()
     reward = db.query(Reward).filter(Reward.code == "cash_300").one()
     code = rewards.redeem(db, user, reward.id).code
+    db.commit()
 
     _login(client)
     client.post("/api/console/desk/submit", json={"code": code})
     client.post("/api/console/desk/approve", json={"code": code})
     return code
+
 
 
 # --- конфигурация ---
@@ -122,8 +124,10 @@ def test_only_approved_rows_are_exported(client, db, user, monkeypatch):
     db.commit()
     reward = db.query(Reward).filter(Reward.code == "cash_300").one()
     code = rewards.redeem(db, user, reward.id).code
+    db.commit()
 
     _login(client)
+
     client.post("/api/console/desk/submit", json={"code": code})   # без approve
 
     assert sheets.pending_export(db) == []
@@ -176,6 +180,8 @@ def test_export_endpoint_requires_approve_permission(client, db):
     from app.services import admins as admins_service
 
     admins_service.create(db, "deskonly", "password123", permissions=[perms.CODES_VIEW])
+    db.commit()
     _login(client, "deskonly", "password123")
 
     assert client.post("/api/console/sheets/export").status_code == 403
+

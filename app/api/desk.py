@@ -5,6 +5,8 @@
 аппрувить сам себя (право `codes.approve` ему выдать нельзя, см. permissions.py).
 """
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
@@ -18,16 +20,19 @@ from app.schemas import CodeActionRequest
 from app.config import get_settings
 from app.services import audit, rewards, sheets
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/console/desk", tags=["desk"])
 settings = get_settings()
+
 
 
 def _code_payload(db: Session, row: RewardRedemption) -> dict:
     guest = db.get(User, row.user_id)
     return {
         "code": row.code,
-        "status": row.status,
+        "status": rewards.effective_status(row),
         "reward": row.reward_title,
+
         "payout_value": float(row.payout_value),
         "payout_unit": row.payout_unit,
         "pts_spent": row.pts_spent,
@@ -117,15 +122,22 @@ def approve(
 
     audit.log(db, admin.username, "code_approve", target_type="redemption", target_id=row.code,
               detail={"reward": row.reward_title, "submitted_by": row.used_by})
-    db.commit()
+    db.commit()          # атомарная часть закрыта: статус + журнал
 
-    # Пробуем отправить строку в таблицу сразу. Неудача не откатывает
-    # подтверждение: строка останется в очереди и уедет следующей выгрузкой.
+    # Экспорт — отдельная транзакция: сетевой вызов не держит блокировки
+    # и его падение не откатывает уже подтверждённую выдачу.
     exported = False
     if settings.google_autoexport:
-        exported = sheets.export_one(db, row)
+        try:
+            exported = sheets.export_one(db, row)
+            db.commit()
+        except sheets.SheetsError:
+            db.rollback()
+            logger.warning("Автоэкспорт кода %s не удался, уедет следующей выгрузкой", row.code)
 
     return {"ok": True, "code": row.code, "status": row.status, "exported_to_sheets": exported}
+
+
 
 
 @router.post("/reject")

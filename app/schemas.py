@@ -3,10 +3,27 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
-# --- Вебхуки OASys ---
+class GrantPtsRequest(BaseModel):
+    telegram_id: int
+    amount: int = Field(..., ge=1, le=1_000_000)
+    comment: str = Field(default="Ручное начисление", min_length=1, max_length=200)
+
+
+
+class ManualPtsRequest(BaseModel):
+    amount: int = Field(..., ge=-1_000_000, le=1_000_000)
+    comment: str = Field(default="Ручное начисление", max_length=200)
+
+    @field_validator("amount")
+    @classmethod
+    def _not_zero(cls, v: int) -> int:
+        if v == 0:
+            raise ValueError("Сумма не может быть нулевой")
+        return v
+
 
 class SessionStartPayload(BaseModel):
     """Событие «гость сел за ПК».
@@ -57,11 +74,6 @@ class ClaimRequest(BaseModel):
 class UseCodeRequest(BaseModel):
     code: str
 
-
-class GrantPtsRequest(BaseModel):
-    telegram_id: int
-    amount: int
-    comment: str = "Ручное начисление"
 
 
 # --- Панель администратора ---

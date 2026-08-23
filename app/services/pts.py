@@ -69,16 +69,24 @@ def debit(
     return _write(db, user, -amount, reason, ref_type, ref_id, comment)
 
 
+# Заработком считаем только то, что гость получил за активность в клубе.
+# Возврат за сгоревший код, ручная компенсация и выигрыш в «ЛУДЛЕНТЕ» —
+# это перекладывание уже начисленных PTS, а не новый заработок.
+EARNED_REASONS = frozenset({TxReason.ACHIEVEMENT, TxReason.TOPUP})
+
+
 def total_earned(db: Session, user_id: int) -> int:
     """Сколько PTS пользователь заработал за всё время — для накопительной ачивки.
-    Считаем только начисления, списания на неё не влияют."""
+    Считаем только начисления из белого списка EARNED_REASONS."""
     total = db.execute(
         select(func.coalesce(func.sum(PtsTransaction.amount), 0)).where(
             PtsTransaction.user_id == user_id,
             PtsTransaction.amount > 0,
+            PtsTransaction.reason.in_(EARNED_REASONS),
         )
     ).scalar_one()
     return int(total)
+
 
 
 def history(db: Session, user_id: int, limit: int = 50) -> list[PtsTransaction]:

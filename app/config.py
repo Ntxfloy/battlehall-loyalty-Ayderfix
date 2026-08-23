@@ -1,3 +1,4 @@
+import hmac
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -6,7 +7,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    app_env: str = "dev"
+    # Дефолт — прод: забытая переменная окружения не должна ослаблять защиту.
+    app_env: str = "production"
+
     database_url: str = "sqlite:///./battlehall.db"
 
     bot_token: str = ""
@@ -65,3 +68,38 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+_LOCAL_ENVS = frozenset({"dev", "development", "local", "test", "testing", "ci"})
+_PLACEHOLDER_SECRETS = frozenset({
+    "", "change-me", "change-me-too", "changeme", "change-me-now", "changeme-now",
+    "change-me-session-secret", "secret", "token", "admin", "password", "battlehall",
+})
+MIN_SECRET_LEN = 32
+
+
+def is_local_env() -> bool:
+    return (get_settings().app_env or "").strip().lower() in _LOCAL_ENVS
+
+
+def is_production() -> bool:
+    return not is_local_env()
+
+
+def is_placeholder_secret(value: str | None) -> bool:
+    """Дефолтный или слишком короткий секрет считаем отсутствующим."""
+    candidate = (value or "").strip()
+    return candidate.lower() in _PLACEHOLDER_SECRETS or len(candidate) < MIN_SECRET_LEN
+
+
+def secrets_match(provided: str | None, expected: str | None) -> bool:
+    """Безопасная постоянная по времени проверка равенства секретов."""
+    if is_placeholder_secret(expected) or is_placeholder_secret(provided):
+        return False
+    expected_val = (expected or "").strip()
+    try:
+        provided_bytes = (provided or "").encode("utf-8")
+        expected_bytes = expected_val.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return hmac.compare_digest(provided_bytes, expected_bytes)

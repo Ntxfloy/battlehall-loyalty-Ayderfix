@@ -6,11 +6,13 @@
 сверяется с тем, что хранится в таблице clubs.
 """
 
+import hmac
 import logging
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.orm import Session
 
+from app.config import is_placeholder_secret, secrets_match
 from app.db import get_db
 from app.models import Club
 from app.schemas import LinkPhonePayload, SessionEndPayload, SessionStartPayload
@@ -26,11 +28,16 @@ def _resolve_club(db: Session, slug: str, token: str | None) -> Club:
     if club is None or not club.is_active:
         raise HTTPException(status_code=404, detail="Клуб не найден")
 
-    import hmac
+    if is_placeholder_secret(club.oasys_webhook_token):
+        logger.error("Webhook rejected for club %s: unsafe stored token", club.slug)
+        raise HTTPException(status_code=401, detail="Неверный токен вебхука")
 
-    if not token or not hmac.compare_digest(token, club.oasys_webhook_token):
-        raise HTTPException(status_code=403, detail="Неверный токен вебхука")
+    if not secrets_match(token, club.oasys_webhook_token):
+        raise HTTPException(status_code=401, detail="Неверный токен вебхука")
+
     return club
+
+
 
 
 @router.post("/{club_slug}/session-start")
@@ -51,6 +58,7 @@ def session_start(
     except sessions.SessionIngestError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    db.commit()
     return {
         "status": "created" if created else "duplicate",
         "session_id": row.oasys_session_id,
@@ -75,11 +83,13 @@ def session_end(
     except sessions.SessionIngestError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    db.commit()
     return {
         "status": "closed" if closed else "already_closed",
         "session_id": row.oasys_session_id,
         "minutes": row.duration_minutes,
     }
+
 
 
 @router.post("/{club_slug}/link-phone")

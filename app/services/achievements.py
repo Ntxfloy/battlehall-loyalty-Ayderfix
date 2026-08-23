@@ -61,16 +61,21 @@ def _current_key(adef: AchievementDef, at: datetime) -> str:
     return period_key(adef.period, at, settings.game_day_start_hour)
 
 
-def _get_progress(db: Session, user_id: int, adef: AchievementDef, at: datetime) -> AchievementProgress:
+def _find_progress(db: Session, user_id: int, adef: AchievementDef, at: datetime) -> AchievementProgress | None:
     key = _current_key(adef, at)
-    row = db.execute(
+    return db.execute(
         select(AchievementProgress).where(
             AchievementProgress.user_id == user_id,
             AchievementProgress.achievement_code == adef.code,
             AchievementProgress.period_key == key,
         )
     ).scalar_one_or_none()
+
+
+def _get_progress(db: Session, user_id: int, adef: AchievementDef, at: datetime) -> AchievementProgress:
+    row = _find_progress(db, user_id, adef, at)
     if row is None:
+        key = _current_key(adef, at)
         row = AchievementProgress(
             user_id=user_id,
             achievement_code=adef.code,
@@ -83,6 +88,7 @@ def _get_progress(db: Session, user_id: int, adef: AchievementDef, at: datetime)
         db.add(row)
         db.flush()
     return row
+
 
 
 def _marks(row: AchievementProgress) -> set[str]:
@@ -239,7 +245,7 @@ def overview(db: Session, user: User, now: datetime | None = None) -> dict:
     result: dict[str, list[dict]] = {"daily": [], "weekly": [], "monthly": [], "special": []}
 
     for adef in _active_defs(db):
-        row = _get_progress(db, user.id, adef, now)
+        row = _find_progress(db, user.id, adef, now)
         ends_at = period_ends_at(adef.period, now, settings.game_day_start_hour)
         item = {
             "code": adef.code,
@@ -248,19 +254,20 @@ def overview(db: Session, user: User, now: datetime | None = None) -> dict:
             "category": adef.category,
             "period": adef.period,
             "unit": adef.unit,
-            "target": row.target,
-            "progress": row.progress,
-            "reward_pts": row.reward_pts,
-            "is_completed": row.completed_at is not None,
-            "is_claimed": row.claimed_at is not None,
-            "can_claim": row.completed_at is not None and row.claimed_at is None,
+            "target": row.target if row else adef.target,
+            "progress": row.progress if row else 0,
+            "reward_pts": row.reward_pts if row else adef.reward_pts,
+            "is_completed": (row.completed_at is not None) if row else False,
+            "is_claimed": (row.claimed_at is not None) if row else False,
+            "can_claim": (row.completed_at is not None and row.claimed_at is None) if row else False,
             "is_available": adef.is_implemented,
             "period_ends_at": ends_at.isoformat() if ends_at else None,
         }
         result.setdefault(adef.category, []).append(item)
 
-    db.commit()
     return result
+
+
 
 
 def completed_count(db: Session, user: User) -> int:

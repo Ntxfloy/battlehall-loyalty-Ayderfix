@@ -63,25 +63,40 @@ def test_console_endpoints_require_login(client, db):
     assert client.get("/api/console/logs").status_code == 401
 
 
-def test_service_token_still_works_on_old_admin_routes(client, db, user):
-    """/api/admin/* обязан продолжать пускать по X-Admin-Token — им пользуются
-    внешние скрипты, которые не умеют логиниться куками."""
-    response = client.post(
+def test_service_token_works_on_read_routes_but_blocked_on_pts_grant(client, db, user, settings_patch):
+    """/api/admin/* пускает по валидному безопасному X-Admin-Token на обычные ручки (например, lookup_code),
+    но запрещает сервисный токен для денежной ручки pts/grant (allow_service_token=False)."""
+    from app.models import Reward
+    from app.services import rewards
+
+    secure_token = "valid_secure_admin_service_token_32_chars_long"
+    settings_patch(admin_token=secure_token)
+
+    # 1. pts/grant с сервисным токеном возвращает 403 Forbidden
+    grant_resp = client.post(
         "/api/admin/pts/grant",
-        headers={"X-Admin-Token": "change-me-too"},
+        headers={"X-Admin-Token": secure_token},
         json={"telegram_id": user.telegram_id, "amount": 100, "comment": "тест"},
     )
-    assert response.status_code == 200
-    assert response.json()["balance"] == 100
+    assert grant_resp.status_code == 403
+
+    # 2. lookup_code с валидным сервисным токеном возвращает 200/404 (аутентифицирован)
+    lookup_resp = client.get(
+        "/api/admin/redemptions/NONEXISTENT",
+        headers={"X-Admin-Token": secure_token},
+    )
+    assert lookup_resp.status_code == 404   # 404 означает, что авторизация прошла успено (не 401/403)
 
 
-def test_session_cookie_also_authorizes_old_admin_routes(client, db, user):
+
+def test_session_cookie_authorizes_admin_routes(client, db, user):
     _login(client)
     response = client.post(
         "/api/admin/pts/grant",
         json={"telegram_id": user.telegram_id, "amount": 50, "comment": "тест"},
     )
     assert response.status_code == 200
+
 
 
 # --- клубы ---
@@ -106,10 +121,11 @@ def test_duplicate_club_slug_rejected(client, db, club):
 
 def test_rotate_token_changes_it(client, db, club):
     _login(client)
-    before = client.get("/api/console/clubs").json()["items"][0]["webhook_token"]
+    before = club.oasys_webhook_token
     rotated = client.post(f"/api/console/clubs/{club.id}/rotate-token")
     assert rotated.status_code == 200
     assert rotated.json()["webhook_token"] != before
+
 
 
 def test_deactivate_club_blocks_its_webhook(client, db, club):
@@ -208,6 +224,7 @@ def test_actions_are_logged(client, db, user):
 def test_reports_aggregate_by_club(client, db, club, user):
     _login(client)
     clubs_service.create(db, "south", "Южный")
+    db.commit()
 
     client.post(
         "/api/console/test/session-start",
@@ -231,13 +248,56 @@ def test_same_session_id_allowed_in_different_clubs(db, club, user):
     from app.services import clubs as clubs_svc, sessions
 
     other = clubs_svc.create(db, "east", "Восточный")
+    db.commit()
     payload = SessionStartPayload(
         session_id="dup-1",
         pc_number=20,
         started_at=datetime.now(timezone.utc),
         telegram_id=user.telegram_id,
     )
+
     _, created_a = sessions.start_session(db, club, payload)
     _, created_b = sessions.start_session(db, other, payload)
     assert created_a is True
     assert created_b is True
+
+
+def test_staff_without_permissions_gets_403(client, db, user):
+    """Сотрудник (STAFF) без соответствующего права получает 403 Forbidden."""
+    from app.admin_auth import create_session_value, hash_password
+    from app.models import AdminRole, AdminUser
+
+    staff = AdminUser(
+        username="staff1",
+        password_hash=hash_password("pass123"),
+        display_name="Сотрудник",
+        role=AdminRole.STAFF,
+        permissions="[]",
+        is_active=True,
+    )
+    db.add(staff)
+    db.commit()
+
+    client.cookies.set("bh_admin_session", create_session_value(staff.id))
+
+    # /api/admin/pts/grant должен вернуть 403
+    resp_grant = client.post("/api/admin/pts/grant", json={"telegram_id": user.telegram_id, "amount": 100, "comment": "test"})
+    assert resp_grant.status_code == 403
+
+    # /api/console/clubs должен вернуть 403
+    resp_clubs = client.get("/api/console/clubs")
+    assert resp_clubs.status_code == 403
+
+
+def test_test_routes_forbidden_in_prod(client, db, club, settings_patch):
+    """Тестовые симуляции сессий запрещены в продакшене (возвращают 404 или 403)."""
+    _login(client)
+    settings_patch(app_env="prod")
+    resp = client.post(
+        "/api/console/test/session-start",
+        json={"club_slug": club.slug, "telegram_id": 999111, "pc_number": 1},
+    )
+    assert resp.status_code in (403, 404)
+
+
+

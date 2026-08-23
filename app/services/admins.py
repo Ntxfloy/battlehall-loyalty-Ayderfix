@@ -43,16 +43,21 @@ def create(
     if exists:
         raise AdminError(f"Учётка «{username}» уже существует")
 
+    try:
+        raw_perms = perms.dump(permissions if permissions is not None else perms.DEFAULT_STAFF, target_is_owner=False)
+    except ValueError as exc:
+        raise AdminError(str(exc)) from exc
+
     row = AdminUser(
         username=username,
         password_hash=hash_password(password),
         display_name=display_name or username,
         role=AdminRole.STAFF,   # владелец в системе один, новые — всегда сотрудники
-        permissions=perms.dump(permissions if permissions is not None else perms.DEFAULT_STAFF),
+        permissions=raw_perms,
         club_id=club_id,
     )
     db.add(row)
-    db.commit()
+    db.flush()
     return row
 
 
@@ -73,15 +78,19 @@ def update(
     if display_name is not None:
         row.display_name = display_name
     if permissions is not None:
-        row.permissions = perms.dump(permissions)
+        try:
+            row.permissions = perms.dump(permissions, target_is_owner=(row.role == AdminRole.OWNER))
+        except ValueError as exc:
+            raise AdminError(str(exc)) from exc
     if is_active is not None:
         row.is_active = is_active
     if club_id is not None:
         row.club_id = club_id or None
 
     db.add(row)
-    db.commit()
+    db.flush()
     return row
+
 
 
 def set_password(db: Session, admin_id: int, password: str) -> AdminUser:
@@ -90,7 +99,7 @@ def set_password(db: Session, admin_id: int, password: str) -> AdminUser:
     row = get(db, admin_id)
     row.password_hash = hash_password(password)
     db.add(row)
-    db.commit()
+    db.flush()
     return row
 
 
@@ -99,7 +108,8 @@ def delete(db: Session, admin_id: int) -> None:
     if row.role == AdminRole.OWNER:
         raise AdminError("Учётку владельца нельзя удалить")
     db.delete(row)
-    db.commit()
+    db.flush()
+
 
 
 def payload(row: AdminUser) -> dict:
