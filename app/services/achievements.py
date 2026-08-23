@@ -224,16 +224,28 @@ def claim(db: Session, user: User, code: str) -> AchievementProgress:
 
     row.claimed_at = now
     db.add(row)
-    pts.credit(
-        db,
-        user,
-        row.reward_pts,
-        reason=TxReason.ACHIEVEMENT,
-        ref_type="achievement",
-        ref_id=f"{code}:{key}",
-        comment=adef.title,
-    )
-    on_pts_changed(db, user)
+
+    # Ачивка может быть имиджевой и не давать PTS. Раньше такая строка
+    # уронила бы claim через ValueError в pts.credit — гость получал 500
+    # вместо отметки ·забрано·.
+    if row.reward_pts > 0:
+        # Ключ идемпотентности привязан к строке прогресса (гость + ачивка + период):
+        # даже если claimed_at когда-то собьют руками или два запроса придут
+        # одновременно, PTS за одну и ту же ачивку начислятся ровно один раз.
+        pts.credit(
+            db,
+            user,
+            row.reward_pts,
+            reason=TxReason.ACHIEVEMENT,
+            ref_type="achievement",
+            ref_id=f"{code}:{key}",
+            comment=adef.title,
+            idem_key=f"achievement_claim:{row.id}",
+        )
+        on_pts_changed(db, user)
+    else:
+        db.flush()
+
     return row
 
 
