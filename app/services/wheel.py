@@ -77,6 +77,26 @@ def _build_reel(pool: list[WheelPrize], winner: WheelPrize) -> list[dict]:
     return reel
 
 
+def _refund_broken_prize(db: Session, user: User, wheel: Wheel, spin_row: WheelSpin) -> None:
+    """Последняя линия защиты для битых данных из seed/БД.
+
+    Каталог валидирует призы на записи, но прямое изменение БД не должно
+    превращаться в списание без результата для гостя.
+    """
+    pts.credit(
+        db,
+        user,
+        wheel.cost_pts,
+        reason=TxReason.REWARD_REFUND,
+        ref_type="wheel",
+        ref_id=str(wheel.id),
+        comment="Приз настроен неверно, прокрутка возвращена",
+    )
+    spin_row.prize_title = "Приз недоступен, PTS возвращены"
+    spin_row.prize_kind = PrizeKind.NOTHING
+    spin_row.pts_won = 0
+
+
 def _resolve_one(db: Session, user: User, wheel: Wheel, pool: list[WheelPrize]) -> dict:
     winner = _pick(pool)
 
@@ -107,22 +127,16 @@ def _resolve_one(db: Session, user: User, wheel: Wheel, pool: list[WheelPrize]) 
     elif winner.kind == PrizeKind.REWARD and winner.reward_id:
         reward = db.get(Reward, winner.reward_id)
         if reward is None or not reward.is_active:
-            pts.credit(
-                db,
-                user,
-                wheel.cost_pts,
-                reason=TxReason.REWARD_REFUND,
-                ref_type="wheel",
-                ref_id=str(wheel.id),
-                comment="Приз недоступен, прокрутка возвращена",
-            )
-            spin_row.prize_title = "Приз недоступен, PTS возвращены"
-            spin_row.prize_kind = PrizeKind.NOTHING
+            _refund_broken_prize(db, user, wheel, spin_row)
         else:
             redemption = rewards.issue_code(db, user, reward, source="wheel")
             spin_row.redemption_id = redemption.id
 
+    elif winner.kind != PrizeKind.NOTHING:
+        _refund_broken_prize(db, user, wheel, spin_row)
+
     db.add(spin_row)
+    db.flush()
 
     return {
         "spin_id": spin_row.id,
@@ -142,6 +156,8 @@ def spin(db: Session, user: User, wheel_id: int, count: int = 1, all_in: bool = 
     wheel = db.get(Wheel, wheel_id)
     if wheel is None or not wheel.is_active:
         raise WheelError("Лента недоступна")
+    if wheel.cost_pts <= 0:
+        raise WheelError("Лента настроена неверно: стоимость должна быть больше нуля")
 
     pool = prizes_of(db, wheel.id)
     if not pool:

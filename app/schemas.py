@@ -3,9 +3,14 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, model_validator
 
 MAX_SESSION_MINUTES = 24 * 60
+RewardKindValue = Literal["cash", "premium"]
+PayoutUnitValue = Literal["RUB", "MONTHS"]
+PrizeKindValue = Literal["pts", "reward", "nothing"]
+PrizeRarityValue = Literal["common", "rare", "epic", "legendary"]
+AchievementUnitValue = Literal["раз", "дн.", "зон", "мин", "PTS"]
 
 
 class GrantPtsRequest(BaseModel):
@@ -18,12 +23,11 @@ class ManualPtsRequest(BaseModel):
     amount: int = Field(..., ge=-1_000_000, le=1_000_000)
     comment: str = Field(default="Ручное начисление", max_length=200)
 
-    @field_validator("amount")
-    @classmethod
-    def _not_zero(cls, v: int) -> int:
-        if v == 0:
+    @model_validator(mode="after")
+    def _not_zero(self):
+        if self.amount == 0:
             raise ValueError("Сумма не может быть нулевой")
-        return v
+        return self
 
 
 class SessionStartPayload(BaseModel):
@@ -33,16 +37,13 @@ class SessionStartPayload(BaseModel):
     то и используем; резолвим по приоритету client_id -> telegram_id -> phone.
     """
 
-    session_id: str = Field(..., description="ID сессии в OASys, ключ идемпотентности")
+    session_id: str = Field(..., min_length=1, max_length=64, description="ID сессии в OASys, ключ идемпотентности")
     pc_number: int = Field(..., ge=1, le=49)
     started_at: datetime
 
-    client_id: str | None = None
+    client_id: str | None = Field(default=None, min_length=1, max_length=64)
     telegram_id: int | None = None
-    phone: str | None = None
-
-    ended_at: datetime | None = None
-    duration_minutes: int | None = Field(default=None, ge=0, le=MAX_SESSION_MINUTES)
+    phone: str | None = Field(default=None, min_length=3, max_length=32)
 
 
 class SessionEndPayload(SessionStartPayload):
@@ -51,13 +52,19 @@ class SessionEndPayload(SessionStartPayload):
     ended_at: datetime | None = None
     duration_minutes: int | None = Field(default=None, ge=0, le=MAX_SESSION_MINUTES)
 
+    @model_validator(mode="after")
+    def _end_not_before_start(self):
+        if self.ended_at is not None and self.ended_at < self.started_at:
+            raise ValueError("ended_at не может быть раньше started_at")
+        return self
+
 
 class LinkPhonePayload(BaseModel):
     """Привязка телефона к Telegram — приезжает из существующего бота OASys."""
 
     telegram_id: int
-    phone: str
-    client_id: str | None = None
+    phone: str = Field(..., min_length=3, max_length=32)
+    client_id: str | None = Field(default=None, min_length=1, max_length=64)
 
 
 class RedeemRequest(BaseModel):
@@ -65,11 +72,11 @@ class RedeemRequest(BaseModel):
 
 
 class ClaimRequest(BaseModel):
-    code: str
+    code: str = Field(..., min_length=1, max_length=64)
 
 
 class UseCodeRequest(BaseModel):
-    code: str
+    code: str = Field(..., min_length=1, max_length=64)
 
 
 class AdminLoginRequest(BaseModel):
@@ -83,7 +90,7 @@ class ClubCreateRequest(BaseModel):
 
 
 class ClubUpdateRequest(BaseModel):
-    name: str | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=128)
     is_active: bool | None = None
 
 
@@ -93,20 +100,20 @@ class TestSessionStartRequest(BaseModel):
 
     __test__ = False
 
-    club_slug: str
+    club_slug: str = Field(..., min_length=2, max_length=32)
     telegram_id: int
     pc_number: int = Field(..., ge=1, le=49)
-    session_id: str | None = None
+    session_id: str | None = Field(default=None, min_length=1, max_length=64)
     started_at: datetime | None = None
 
 
 class TestSessionEndRequest(BaseModel):
     __test__ = False
 
-    club_slug: str
+    club_slug: str = Field(..., min_length=2, max_length=32)
     telegram_id: int
-    session_id: str
-    pc_number: int | None = None
+    session_id: str = Field(..., min_length=1, max_length=64)
+    pc_number: int | None = Field(default=None, ge=1, le=49)
     started_at: datetime | None = None
     duration_minutes: int | None = Field(default=None, ge=0, le=MAX_SESSION_MINUTES)
 
@@ -114,14 +121,14 @@ class TestSessionEndRequest(BaseModel):
 class AdminCreateRequest(BaseModel):
     username: str = Field(..., min_length=2, max_length=64)
     password: str = Field(..., min_length=8, max_length=128)
-    display_name: str = ""
-    permissions: list[str] = Field(default_factory=list)
+    display_name: str = Field(default="", max_length=128)
+    permissions: list[str] = Field(default_factory=list, max_length=100)
     club_id: int | None = None
 
 
 class AdminUpdateRequest(BaseModel):
-    display_name: str | None = None
-    permissions: list[str] | None = None
+    display_name: str | None = Field(default=None, max_length=128)
+    permissions: list[str] | None = Field(default=None, max_length=100)
     is_active: bool | None = None
     club_id: int | None = None
 
@@ -136,13 +143,13 @@ class SelfPasswordRequest(BaseModel):
 
 
 class CodeActionRequest(BaseModel):
-    code: str
+    code: str = Field(..., min_length=1, max_length=64)
 
 
 class AchievementUpdateRequest(BaseModel):
-    title: str | None = None
-    description: str | None = None
-    unit: str | None = None
+    title: str | None = Field(default=None, min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=2000)
+    unit: AchievementUnitValue | None = None
     target: int | None = Field(default=None, ge=1)
     reward_pts: int | None = Field(default=None, ge=0)
     sort_order: int | None = None
@@ -152,22 +159,22 @@ class AchievementUpdateRequest(BaseModel):
 class RewardCreateRequest(BaseModel):
     code: str = Field(..., min_length=2, max_length=64)
     title: str = Field(..., min_length=1, max_length=128)
-    kind: str = "cash"
-    description: str = ""
+    kind: RewardKindValue = "cash"
+    description: str = Field(default="", max_length=2000)
     cost_pts: int = Field(..., ge=0)
-    payout_value: float = 0
-    payout_unit: str = "RUB"
+    payout_value: float = Field(default=0, ge=0)
+    payout_unit: PayoutUnitValue = "RUB"
     sort_order: int = 0
     is_active: bool = True
 
 
 class RewardUpdateRequest(BaseModel):
-    title: str | None = None
-    kind: str | None = None
-    description: str | None = None
+    title: str | None = Field(default=None, min_length=1, max_length=128)
+    kind: RewardKindValue | None = None
+    description: str | None = Field(default=None, max_length=2000)
     cost_pts: int | None = Field(default=None, ge=0)
-    payout_value: float | None = None
-    payout_unit: str | None = None
+    payout_value: float | None = Field(default=None, ge=0)
+    payout_unit: PayoutUnitValue | None = None
     sort_order: int | None = None
     is_active: bool | None = None
 
@@ -175,15 +182,15 @@ class RewardUpdateRequest(BaseModel):
 class WheelCreateRequest(BaseModel):
     code: str = Field(..., min_length=2, max_length=64)
     title: str = Field(..., min_length=1, max_length=128)
-    description: str = ""
+    description: str = Field(default="", max_length=2000)
     cost_pts: int = Field(..., gt=0)
     sort_order: int = 0
     is_active: bool = True
 
 
 class WheelUpdateRequest(BaseModel):
-    title: str | None = None
-    description: str | None = None
+    title: str | None = Field(default=None, min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=2000)
     cost_pts: int | None = Field(default=None, gt=0)
     sort_order: int | None = None
     is_active: bool | None = None
@@ -191,8 +198,8 @@ class WheelUpdateRequest(BaseModel):
 
 class PrizeRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=128)
-    kind: str = "pts"
-    rarity: str = "common"
+    kind: PrizeKindValue = "pts"
+    rarity: PrizeRarityValue = "common"
     pts_amount: int = Field(default=0, ge=0)
     reward_id: int | None = None
     weight: int = Field(default=1, ge=0)
@@ -201,9 +208,9 @@ class PrizeRequest(BaseModel):
 
 
 class PrizeUpdateRequest(BaseModel):
-    title: str | None = None
-    kind: str | None = None
-    rarity: str | None = None
+    title: str | None = Field(default=None, min_length=1, max_length=128)
+    kind: PrizeKindValue | None = None
+    rarity: PrizeRarityValue | None = None
     pts_amount: int | None = Field(default=None, ge=0)
     reward_id: int | None = None
     weight: int | None = Field(default=None, ge=0)
