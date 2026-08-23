@@ -49,7 +49,6 @@ def attach(db: Session, user: User, code: str) -> bool:
         return False
     if user.referred_by_id is not None:
         return False
-    # Ссылка работает только для новичка: если гость уже играл, он не «приведённый».
     if sessions.total_minutes(db, user.id) > 0:
         return False
 
@@ -73,12 +72,8 @@ def on_session_closed(db: Session, user: User) -> None:
     user.referral_credited = True
     db.add(user)
     try:
-        # Инкремент, а не mark_completed: иначе первый друг закрывает
-        # всю ачивку «приведи N друзей».
         achievements.increment(db, inviter, REFERRAL_ACHIEVEMENT)
     except achievements.AchievementError:
-        # Ачивку могли выключить или удалить из каталога — закрытие сессии
-        # не должно падать и ронять вебхук OASys в бесконечный ретрай.
         logger.warning(
             "Реферал засчитан пользователю %s, но ачивка %s недоступна",
             inviter.id,
@@ -88,9 +83,6 @@ def on_session_closed(db: Session, user: User) -> None:
 
 
 def referral_link(code: str) -> str:
-    """Ссылка ведёт в бота: он ловит /start CODE, привязывает пригласившего
-    и сам открывает мини-апп. Прямая ссылка на мини-апп не даёт боту
-    шанса поздороваться и попросить телефон."""
     if settings.bot_username:
         return f"https://t.me/{settings.bot_username}?start={code}"
     return f"?start={code}"
