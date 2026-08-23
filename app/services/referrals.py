@@ -6,9 +6,8 @@
 
 import logging
 import secrets
-import string
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -19,7 +18,9 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 REFERRAL_ACHIEVEMENT = "special_referral"
-_ALPHABET = string.ascii_uppercase + string.digits
+_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+_CODE_ATTEMPTS = 32
+_MAX_CHAIN_DEPTH = 100
 
 
 class ReferralError(Exception):
@@ -27,11 +28,12 @@ class ReferralError(Exception):
 
 
 def generate_code(db: Session) -> str:
-    while True:
+    for _ in range(_CODE_ATTEMPTS):
         code = "".join(secrets.choice(_ALPHABET) for _ in range(8))
         exists = db.execute(select(User.id).where(User.referral_code == code)).first()
         if not exists:
             return code
+    raise ReferralError("Не удалось создать уникальный реферальный код")
 
 
 def find_by_code(db: Session, code: str) -> User | None:
@@ -42,6 +44,24 @@ def find_by_code(db: Session, code: str) -> User | None:
     ).scalar_one_or_none()
 
 
+def _would_create_cycle(db: Session, user: User, inviter: User) -> bool:
+    """Запрещает A→B→…→A, а не только прямое взаимное приглашение."""
+    current = inviter
+    seen: set[int] = set()
+    for _ in range(_MAX_CHAIN_DEPTH):
+        if current.id == user.id:
+            return True
+        if current.id in seen or current.referred_by_id is None:
+            return False
+        seen.add(current.id)
+        parent = db.get(User, current.referred_by_id)
+        if parent is None:
+            return False
+        current = parent
+    logger.warning("Слишком глубокая реферальная цепочка у пользователя %s", inviter.id)
+    return True
+
+
 def attach(db: Session, user: User, code: str) -> bool:
     inviter = find_by_code(db, code)
     if inviter is None or inviter.id == user.id:
@@ -49,6 +69,8 @@ def attach(db: Session, user: User, code: str) -> bool:
     if user.referred_by_id is not None:
         return False
     if sessions.total_minutes(db, user.id) > 0:
+        return False
+    if _would_create_cycle(db, user, inviter):
         return False
     user.referred_by_id = inviter.id
     db.add(user)
@@ -84,13 +106,16 @@ def referral_link(code: str) -> str:
 
 
 def summary(db: Session, user: User) -> dict:
-    invited = list(
-        db.execute(select(User).where(User.referred_by_id == user.id)).scalars()
-    )
+    invited_total, invited_credited = db.execute(
+        select(
+            func.count(User.id),
+            func.coalesce(func.sum(func.cast(User.referral_credited, int)), 0),
+        ).where(User.referred_by_id == user.id)
+    ).one()
     return {
         "code": user.referral_code,
-        "invited_total": len(invited),
-        "invited_credited": sum(1 for u in invited if u.referral_credited),
+        "invited_total": int(invited_total or 0),
+        "invited_credited": int(invited_credited or 0),
         "min_minutes": settings.referral_min_minutes,
         "link": referral_link(user.referral_code),
     }
