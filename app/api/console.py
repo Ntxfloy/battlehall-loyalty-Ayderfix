@@ -20,17 +20,31 @@ from app.admin_auth import (
 from app.config import get_settings, is_local_env
 from app.db import get_db
 from app.loyalty import group_for_hours
-from app.models import AdminUser, Club, User
+from app.models import AdminUser, Club, User, WebhookInbox
 from app.periods import iso
 from app.rate_limit import login_key, login_limiter
 from app.schemas import (
     AdminLoginRequest,
     ClubCreateRequest,
     ClubUpdateRequest,
+    TestBalanceOperationRequest,
+    TestBookingRequest,
+    TestPurchaseRequest,
     TestSessionEndRequest,
     TestSessionStartRequest,
 )
-from app.services import achievements, audit, clubs as clubs_service, oasys_live, pts, rewards, sessions
+from app.services import (
+    achievements,
+    audit,
+    bookings,
+    clubs as clubs_service,
+    oasys_ledger,
+    oasys_live,
+    pts,
+    purchases,
+    rewards,
+    sessions,
+)
 from app.zones import zone_title
 
 router = APIRouter(prefix="/api/console", tags=["console"])
@@ -374,6 +388,37 @@ def logs(
     }
 
 
+# --- сырой журнал вебхуков OASys ---
+
+@router.get("/webhook-inbox")
+def webhook_inbox(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    endpoint: str | None = None,
+    _: AdminUser = Depends(require_permission(perms.LOGS_VIEW)),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Сырые события, полученные на /api/webhooks/oasys/* — включая те, что
+    не удалось обработать. Пишется до попытки обработки (см. app/api/webhooks.py)."""
+    stmt = select(WebhookInbox).order_by(WebhookInbox.created_at.desc())
+    if endpoint:
+        stmt = stmt.where(WebhookInbox.endpoint == endpoint)
+    rows = list(db.execute(stmt.offset((page - 1) * page_size).limit(page_size)).scalars())
+    return {
+        "items": [
+            {
+                "club_id": r.club_id,
+                "endpoint": r.endpoint,
+                "status": r.status,
+                "error": r.error,
+                "raw_body": r.raw_body,
+                "created_at": iso(r.created_at),
+            }
+            for r in rows
+        ]
+    }
+
+
 # --- отчётность по клубам ---
 
 @router.get("/reports")
@@ -468,3 +513,104 @@ def test_session_end(
               detail={"club": club.slug, "minutes": row.duration_minutes})
     db.commit()
     return {"ok": True, "session_id": row.oasys_session_id, "closed": closed, "minutes": row.duration_minutes}
+
+
+@test_router.post("/booking")
+def test_booking(
+    body: TestBookingRequest,
+    admin: AdminUser = Depends(require_permission(perms.TEST_TOOLS)),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Симулирует ПРЕДЛОЖЕННЫЙ вебхук брони — OASys его ещё не шлёт."""
+    club = clubs_service.get_by_slug(db, body.club_slug)
+    if club is None:
+        raise HTTPException(status_code=404, detail="Клуб не найден")
+
+    _ensure_test_user(db, body.telegram_id)
+
+    from app.schemas import BookingPayload
+
+    payload = BookingPayload(
+        booking_id=body.booking_id or f"test-booking-{int(datetime.now(timezone.utc).timestamp())}",
+        status=body.status,
+        pc_number=body.pc_number,
+        price=body.price,
+        telegram_id=body.telegram_id,
+    )
+    try:
+        row, created = bookings.ingest(db, club, payload)
+    except bookings.BookingIngestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    audit.log(db, admin.username, "test_booking", target_type="booking", target_id=row.external_booking_id,
+              detail={"club": club.slug, "telegram_id": body.telegram_id, "status": row.status})
+    db.commit()
+    return {"ok": True, "booking_id": row.external_booking_id, "status": row.status, "created": created}
+
+
+@test_router.post("/purchase")
+def test_purchase(
+    body: TestPurchaseRequest,
+    admin: AdminUser = Depends(require_permission(perms.TEST_TOOLS)),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Симулирует ПРЕДЛОЖЕННЫЙ вебхук покупки пакета часов — OASys его ещё не шлёт."""
+    club = clubs_service.get_by_slug(db, body.club_slug)
+    if club is None:
+        raise HTTPException(status_code=404, detail="Клуб не найден")
+
+    _ensure_test_user(db, body.telegram_id)
+
+    from app.schemas import PurchasePayload
+
+    payload = PurchasePayload(
+        purchase_id=body.purchase_id or f"test-purchase-{int(datetime.now(timezone.utc).timestamp())}",
+        sku=body.sku,
+        amount=body.amount,
+        purchased_at=datetime.now(timezone.utc),
+        telegram_id=body.telegram_id,
+    )
+    try:
+        row, created = purchases.ingest(db, club, payload)
+    except purchases.PurchaseIngestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    audit.log(db, admin.username, "test_purchase", target_type="purchase", target_id=row.external_purchase_id,
+              detail={"club": club.slug, "telegram_id": body.telegram_id, "sku": row.sku})
+    db.commit()
+    return {"ok": True, "purchase_id": row.external_purchase_id, "sku": row.sku, "created": created}
+
+
+@test_router.post("/balance-operation")
+def test_balance_operation(
+    body: TestBalanceOperationRequest,
+    admin: AdminUser = Depends(require_permission(perms.TEST_TOOLS)),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Симулирует ПРЕДЛОЖЕННЫЙ вебхук движения денег в OASys — OASys его ещё не шлёт."""
+    club = clubs_service.get_by_slug(db, body.club_slug)
+    if club is None:
+        raise HTTPException(status_code=404, detail="Клуб не найден")
+
+    _ensure_test_user(db, body.telegram_id)
+
+    from app.schemas import BalanceOperationPayload
+
+    payload = BalanceOperationPayload(
+        operation_id=body.operation_id or f"test-op-{int(datetime.now(timezone.utc).timestamp())}",
+        operation_type=body.operation_type,
+        amount=body.amount,
+        payment_method=body.payment_method,
+        created_at=datetime.now(timezone.utc),
+        telegram_id=body.telegram_id,
+    )
+    try:
+        row, created = oasys_ledger.ingest(db, club, payload)
+    except oasys_ledger.BalanceOperationIngestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    audit.log(db, admin.username, "test_balance_operation", target_type="balance_operation",
+              target_id=row.external_operation_id,
+              detail={"club": club.slug, "telegram_id": body.telegram_id, "amount": str(row.amount)})
+    db.commit()
+    return {"ok": True, "operation_id": row.external_operation_id, "type": row.operation_type, "created": created}

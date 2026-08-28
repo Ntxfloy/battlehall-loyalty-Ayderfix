@@ -201,9 +201,11 @@ def spin(
         raise WheelError("У тебя уже есть активный код — сначала используй его")
 
     if all_in:
-        count = min(user.pts_balance // wheel.cost_pts, ALL_IN_CAP)
+        count = user.pts_balance // wheel.cost_pts
         if count < 1:
             raise WheelError(f"Не хватает PTS даже на одну прокрутку: нужно {wheel.cost_pts}, на балансе {user.pts_balance}")
+        if count > ALL_IN_CAP:
+            count = ALL_IN_CAP
     elif count not in SPIN_COUNTS:
         raise WheelError("Неверное количество прокруток")
 

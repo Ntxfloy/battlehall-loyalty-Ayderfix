@@ -678,7 +678,6 @@ const SPIN_DURATION_MS = 5200;
 const SPIN_DURATION_MULTI_MS = 1800;
 const REEL_STAGGER_MS = 220;
 const SPIN_COUNTS = [1, 5, 10];
-const ALL_IN_CAP = 20;
 
 async function loadLoot() {
   $('#lootList').innerHTML = '<div class="skeleton"></div>';
@@ -727,7 +726,7 @@ function renderLoot() {
         }).join('')}
       </div>
       ${(() => {
-        const allInCount = Math.min(Math.floor(data.balance / wheel.cost_pts), ALL_IN_CAP);
+        const allInCount = Math.floor(data.balance / wheel.cost_pts);
         return `
           <button class="btn allin block" data-spin="${wheel.id}" data-allin="1" ${allInCount > 0 ? '' : 'disabled'}>
             ${allInCount > 0

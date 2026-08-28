@@ -9,7 +9,11 @@ venv/
 .env.local
 secrets/*.json
 *.db
+*.db-shm
+*.db-wal
+*.db-journal
 *.sqlite3
+server.log
 
 # IDE
 .idea/

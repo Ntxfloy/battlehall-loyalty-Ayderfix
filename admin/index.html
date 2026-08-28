@@ -171,6 +171,58 @@
           </form>
           <div id="testEndResult" class="result-box"></div>
         </div>
+
+        <p class="muted small">Ниже — вебхуки, которых OASys ещё не шлёт (брони, покупки пакетов часов,
+          движение денег на счёте). Контракт предложен нами, ждём подтверждения от их разработчика —
+          формы уже работают на нашей стороне.</p>
+
+        <div class="panel">
+          <h2>Бронь (предложенный вебхук)</h2>
+          <form id="testBookingForm" class="inline-form">
+            <select id="testBookingClub"></select>
+            <input id="testBookingTelegramId" type="number" placeholder="telegram_id" required>
+            <select id="testBookingStatus">
+              <option value="completed">completed</option>
+              <option value="created">created</option>
+              <option value="confirmed">confirmed</option>
+              <option value="cancelled">cancelled</option>
+              <option value="no_show">no_show</option>
+            </select>
+            <input id="testBookingPc" type="number" min="1" max="49" placeholder="№ ПК (опц.)">
+            <button class="btn primary" type="submit">Отправить</button>
+          </form>
+          <div id="testBookingResult" class="result-box"></div>
+        </div>
+
+        <div class="panel">
+          <h2>Покупка пакета часов (предложенный вебхук)</h2>
+          <form id="testPurchaseForm" class="inline-form">
+            <select id="testPurchaseClub"></select>
+            <input id="testPurchaseTelegramId" type="number" placeholder="telegram_id" required>
+            <select id="testPurchaseSku">
+              <option value="pack_3h">pack_3h</option>
+              <option value="pack_5h">pack_5h</option>
+            </select>
+            <input id="testPurchaseAmount" type="number" min="0" placeholder="сумма, ₽">
+            <button class="btn primary" type="submit">Отправить</button>
+          </form>
+          <div id="testPurchaseResult" class="result-box"></div>
+        </div>
+
+        <div class="panel">
+          <h2>Движение денег в OASys (предложенный вебхук)</h2>
+          <form id="testBalanceOpForm" class="inline-form">
+            <select id="testBalanceOpClub"></select>
+            <input id="testBalanceOpTelegramId" type="number" placeholder="telegram_id" required>
+            <select id="testBalanceOpType">
+              <option value="increase">increase</option>
+              <option value="decrease">decrease</option>
+            </select>
+            <input id="testBalanceOpAmount" type="number" min="0" placeholder="сумма, ₽" required>
+            <button class="btn primary" type="submit">Отправить</button>
+          </form>
+          <div id="testBalanceOpResult" class="result-box"></div>
+        </div>
       </section>
 
       <!-- СТОЙКА -->
@@ -268,6 +320,10 @@
       <section class="view" data-view="logs" hidden>
         <h1>Журнал действий</h1>
         <div id="logsTable" class="table-wrap"></div>
+
+        <h1>Входящие вебхуки OASys (сырой журнал)</h1>
+        <p class="muted small">Каждое событие пишется до попытки обработки — видно и то, что не удалось разобрать.</p>
+        <div id="webhookInboxTable" class="table-wrap"></div>
       </section>
     </main>
   </div>
@@ -291,7 +347,7 @@
   </div>
 
   <div id="toast" class="toast" hidden></div>
-  <script src="/admin/app.js?v=9"></script>
+  <script src="/admin/app.js?v=10"></script>
   <script src="/admin/sections.js?v=9"></script>
 </body>
 </html>
