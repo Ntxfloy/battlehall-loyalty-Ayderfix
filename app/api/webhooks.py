@@ -12,11 +12,20 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from pydantic import BaseModel
+
 from app.config import is_placeholder_secret, secrets_match
 from app.db import get_db
-from app.models import Club, User
-from app.schemas import LinkPhonePayload, SessionEndPayload, SessionStartPayload
-from app.services import clubs, referrals, sessions
+from app.models import Club, User, WebhookInbox
+from app.schemas import (
+    BalanceOperationPayload,
+    BookingPayload,
+    LinkPhonePayload,
+    PurchasePayload,
+    SessionEndPayload,
+    SessionStartPayload,
+)
+from app.services import bookings, clubs, oasys_ledger, purchases, referrals, sessions
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +45,14 @@ def _resolve_club(db: Session, slug: str, token: str | None) -> Club:
         raise HTTPException(status_code=401, detail="Неверный токен вебхука")
 
     return club
+
+
+def _log_inbox(db: Session, club: Club, endpoint: str, payload: BaseModel, status: str) -> None:
+    """Пишет сырое событие и коммитит его ДО попытки обработки: на любой
+    спор «что именно прислал OASys» есть однозначный ответ, даже если сама
+    обработка ниже упадёт и откатится (Roadmap/СТАТУС.md, п.4)."""
+    db.add(WebhookInbox(club_id=club.id, endpoint=endpoint, raw_body=payload.model_dump_json(), status=status))
+    db.commit()
 
 
 @router.post("/{club_slug}/session-start")
@@ -85,6 +102,75 @@ def session_end(
         "session_id": row.oasys_session_id,
         "minutes": row.duration_minutes,
     }
+
+
+@router.post("/{club_slug}/booking")
+def booking_webhook(
+    club_slug: str,
+    payload: BookingPayload,
+    x_oasys_token: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> dict:
+    """ПРЕДЛОЖЕННЫЙ контракт — OASys брони пока не шлёт (см. README
+    «Что нужно от команды OASys»). Роут заведён заранее, чтобы было что
+    показать/протестировать до их ответа."""
+    club = _resolve_club(db, club_slug, x_oasys_token)
+    _log_inbox(db, club, "booking", payload, status="received")
+    try:
+        row, created = bookings.ingest(db, club, payload)
+    except bookings.UserNotLinked:
+        logger.info("club %s, booking %s: гость не привязан, пропускаем", club_slug, payload.booking_id)
+        return {"status": "skipped", "reason": "user_not_linked"}
+    except bookings.BookingIngestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    db.commit()
+    return {"status": "created" if created else "updated", "booking_id": row.external_booking_id}
+
+
+@router.post("/{club_slug}/purchase")
+def purchase_webhook(
+    club_slug: str,
+    payload: PurchasePayload,
+    x_oasys_token: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> dict:
+    """ПРЕДЛОЖЕННЫЙ контракт — OASys покупки пакетов часов пока не шлёт."""
+    club = _resolve_club(db, club_slug, x_oasys_token)
+    _log_inbox(db, club, "purchase", payload, status="received")
+    try:
+        row, created = purchases.ingest(db, club, payload)
+    except purchases.UserNotLinked:
+        logger.info("club %s, purchase %s: гость не привязан, пропускаем", club_slug, payload.purchase_id)
+        return {"status": "skipped", "reason": "user_not_linked"}
+    except purchases.PurchaseIngestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    db.commit()
+    return {"status": "created" if created else "duplicate", "purchase_id": row.external_purchase_id}
+
+
+@router.post("/{club_slug}/balance-operation")
+def balance_operation_webhook(
+    club_slug: str,
+    payload: BalanceOperationPayload,
+    x_oasys_token: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> dict:
+    """ПРЕДЛОЖЕННЫЙ контракт — замена пуллингу operations/history из
+    oasys_live.py. OASys пока не шлёт, роут заведён заранее для демонстрации."""
+    club = _resolve_club(db, club_slug, x_oasys_token)
+    _log_inbox(db, club, "balance-operation", payload, status="received")
+    try:
+        row, created = oasys_ledger.ingest(db, club, payload)
+    except oasys_ledger.UserNotLinked:
+        logger.info("club %s, operation %s: гость не привязан, пропускаем", club_slug, payload.operation_id)
+        return {"status": "skipped", "reason": "user_not_linked"}
+    except oasys_ledger.BalanceOperationIngestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    db.commit()
+    return {"status": "created" if created else "duplicate", "operation_id": row.external_operation_id}
 
 
 @router.post("/{club_slug}/link-phone")

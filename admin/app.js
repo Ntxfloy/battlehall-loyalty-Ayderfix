@@ -616,6 +616,9 @@ async function loadTestForms() {
   const options = state.clubs.map((c) => `<option value="${esc(c.slug)}">${esc(c.name)}</option>`).join('');
   $('#testStartClub').innerHTML = options;
   $('#testEndClub').innerHTML = options;
+  $('#testBookingClub').innerHTML = options;
+  $('#testPurchaseClub').innerHTML = options;
+  $('#testBalanceOpClub').innerHTML = options;
 }
 
 $('#testStartForm').addEventListener('submit', async (event) => {
@@ -659,6 +662,66 @@ $('#testEndForm').addEventListener('submit', async (event) => {
   }
 });
 
+$('#testBookingForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const submitBtn = event.target.querySelector('button[type="submit"]');
+  try {
+    const data = await busy(submitBtn, () => api('/api/console/test/booking', {
+      method: 'POST',
+      body: JSON.stringify({
+        club_slug: $('#testBookingClub').value,
+        telegram_id: Number($('#testBookingTelegramId').value),
+        status: $('#testBookingStatus').value,
+        pc_number: $('#testBookingPc').value ? Number($('#testBookingPc').value) : undefined,
+      }),
+    }));
+    $('#testBookingResult').innerHTML = `<pre>${esc(JSON.stringify(data, null, 2))}</pre>`;
+  } catch (error) {
+    $('#testBookingResult').innerHTML = `<div class="empty">${esc(describeError(error))}</div>`;
+    if (error.status === 401) sessionExpired();
+  }
+});
+
+$('#testPurchaseForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const submitBtn = event.target.querySelector('button[type="submit"]');
+  try {
+    const data = await busy(submitBtn, () => api('/api/console/test/purchase', {
+      method: 'POST',
+      body: JSON.stringify({
+        club_slug: $('#testPurchaseClub').value,
+        telegram_id: Number($('#testPurchaseTelegramId').value),
+        sku: $('#testPurchaseSku').value,
+        amount: $('#testPurchaseAmount').value ? Number($('#testPurchaseAmount').value) : 0,
+      }),
+    }));
+    $('#testPurchaseResult').innerHTML = `<pre>${esc(JSON.stringify(data, null, 2))}</pre>`;
+  } catch (error) {
+    $('#testPurchaseResult').innerHTML = `<div class="empty">${esc(describeError(error))}</div>`;
+    if (error.status === 401) sessionExpired();
+  }
+});
+
+$('#testBalanceOpForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const submitBtn = event.target.querySelector('button[type="submit"]');
+  try {
+    const data = await busy(submitBtn, () => api('/api/console/test/balance-operation', {
+      method: 'POST',
+      body: JSON.stringify({
+        club_slug: $('#testBalanceOpClub').value,
+        telegram_id: Number($('#testBalanceOpTelegramId').value),
+        operation_type: $('#testBalanceOpType').value,
+        amount: Number($('#testBalanceOpAmount').value),
+      }),
+    }));
+    $('#testBalanceOpResult').innerHTML = `<pre>${esc(JSON.stringify(data, null, 2))}</pre>`;
+  } catch (error) {
+    $('#testBalanceOpResult').innerHTML = `<div class="empty">${esc(describeError(error))}</div>`;
+    if (error.status === 401) sessionExpired();
+  }
+});
+
 async function loadLogs() {
   const data = await api('/api/console/logs?page_size=100');
   const rows = data.items.map((l) => `
@@ -671,6 +734,17 @@ async function loadLogs() {
     </tr>
   `);
   $('#logsTable').innerHTML = table(['Когда', 'Админ', 'Действие', 'Объект', 'Детали'], rows);
+
+  const inbox = await api('/api/console/webhook-inbox?page_size=100');
+  const inboxRows = inbox.items.map((e) => `
+    <tr>
+      <td>${fmtDate(e.created_at)}</td>
+      <td>${esc(e.endpoint)}</td>
+      <td>${esc(e.status)}${e.error ? `: ${esc(e.error)}` : ''}</td>
+      <td class="small muted"><code>${esc(e.raw_body)}</code></td>
+    </tr>
+  `);
+  $('#webhookInboxTable').innerHTML = table(['Когда', 'Эндпоинт', 'Статус', 'Сырое тело'], inboxRows);
 }
 
 // Последний рубеж: любая непойманная ошибка запроса всё равно показывается человеку.

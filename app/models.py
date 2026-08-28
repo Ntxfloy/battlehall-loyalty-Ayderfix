@@ -204,6 +204,96 @@ class GameSession(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class Booking(Base):
+    """Бронь ПК, приехавшая вебхуком из OASys (пока не подключён — см. README
+    «Что нужно от команды OASys»). Идемпотентна по (club_id, external_booking_id),
+    как и GameSession. Засчитывает ачивку week_booked_play, когда статус
+    становится completed."""
+
+    __tablename__ = "bookings"
+    __table_args__ = (
+        UniqueConstraint("club_id", "external_booking_id", name="uq_booking_per_club"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    club_id: Mapped[int] = mapped_column(ForeignKey("clubs.id"), index=True)
+    external_booking_id: Mapped[str] = mapped_column(String(64), index=True)
+
+    status: Mapped[str] = mapped_column(String(16))
+    pc_number: Mapped[int | None] = mapped_column(Integer)
+    scheduled_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    scheduled_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    price: Mapped[float] = mapped_column(Numeric(10, 2), default=0)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Purchase(Base):
+    """Покупка пакета часов/тарифа, приехавшая вебхуком из OASys (пока не
+    подключён). sku матчится на ачивку в app/services/purchases.py —
+    неизвестный sku просто не даёт прогресса, покупка всё равно сохраняется."""
+
+    __tablename__ = "purchases"
+    __table_args__ = (
+        UniqueConstraint("club_id", "external_purchase_id", name="uq_purchase_per_club"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    club_id: Mapped[int] = mapped_column(ForeignKey("clubs.id"), index=True)
+    external_purchase_id: Mapped[str] = mapped_column(String(64), index=True)
+
+    sku: Mapped[str] = mapped_column(String(64))
+    amount: Mapped[float] = mapped_column(Numeric(10, 2), default=0)
+    purchased_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class OasysBalanceOperation(Base):
+    """Движение денег на счёте гостя внутри самой OASys (пополнение/списание
+    через кассу) — это НЕ PTS и не влияет на баланс лояльности. Хранится
+    только для сверки на стойке при споре («гость говорит, что пополнил») —
+    замена пуллингу GET /method/admin/operations/history из oasys_live.py."""
+
+    __tablename__ = "oasys_balance_operations"
+    __table_args__ = (
+        UniqueConstraint("club_id", "external_operation_id", name="uq_balance_op_per_club"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    club_id: Mapped[int] = mapped_column(ForeignKey("clubs.id"), index=True)
+    external_operation_id: Mapped[str] = mapped_column(String(64), index=True)
+
+    operation_type: Mapped[str] = mapped_column(String(16))   # increase | decrease
+    amount: Mapped[float] = mapped_column(Numeric(10, 2), default=0)
+    payment_method: Mapped[str | None] = mapped_column(String(32))
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class WebhookInbox(Base):
+    """Сырой журнал входящих вебхуков OASys. Пишется и коммитится ДО попытки
+    обработки — на любой спор «что именно прислал OASys» есть однозначный
+    ответ, даже если обработка внутри упала (см. Roadmap/СТАТУС.md, п.4)."""
+
+    __tablename__ = "webhook_inbox"
+    __table_args__ = (
+        Index("ix_webhook_inbox_club_endpoint", "club_id", "endpoint"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    club_id: Mapped[int] = mapped_column(ForeignKey("clubs.id"), index=True)
+    endpoint: Mapped[str] = mapped_column(String(64))
+    raw_body: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(16), default="received")  # received | processed | skipped | error
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
 class PtsTransaction(Base):
     """Журнал движения PTS. Источник правды по балансу — сумма журнала."""
 

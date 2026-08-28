@@ -119,13 +119,13 @@ def test_all_in_spins_as_many_as_balance_allows(db, user, loot):
     assert len(result["spins"]) == 10
 
 
-def test_all_in_is_capped(db, user, loot):
+def test_all_in_is_not_capped(db, user, loot):
     pts.credit(db, user, 10_000, comment="тест")
     db.commit()
 
     result = wheel_service.spin(db, user, loot.id, all_in=True)
 
-    assert result["count"] == wheel_service.ALL_IN_CAP
+    assert result["count"] == 100
 
 
 def test_all_in_without_enough_for_one_spin_is_rejected(db, user, loot):

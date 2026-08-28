@@ -59,6 +59,51 @@ class SessionEndPayload(SessionStartPayload):
         return self
 
 
+class BookingPayload(BaseModel):
+    """Событие «бронь» — ПРЕДЛОЖЕННЫЙ контракт, ждём подтверждения от OASys.
+    Резолвим гостя тем же приоритетом, что и сессии: client_id -> telegram_id -> phone."""
+
+    booking_id: str = Field(..., min_length=1, max_length=64, description="ID брони в OASys, ключ идемпотентности")
+    status: Literal["created", "confirmed", "cancelled", "no_show", "completed"]
+    scheduled_start: datetime | None = None
+    scheduled_end: datetime | None = None
+    pc_number: int | None = Field(default=None, ge=1, le=49)
+    price: float = Field(default=0, ge=0)
+
+    client_id: str | None = Field(default=None, min_length=1, max_length=64)
+    telegram_id: int | None = None
+    phone: str | None = Field(default=None, min_length=3, max_length=32)
+
+
+class PurchasePayload(BaseModel):
+    """Событие «покупка пакета часов/тарифа» — ПРЕДЛОЖЕННЫЙ контракт.
+    sku матчится на ачивку в app/services/purchases.py (SKU_ACHIEVEMENTS)."""
+
+    purchase_id: str = Field(..., min_length=1, max_length=64, description="ID покупки в OASys, ключ идемпотентности")
+    sku: str = Field(..., min_length=1, max_length=64, description="например pack_3h, pack_5h")
+    amount: float = Field(default=0, ge=0)
+    purchased_at: datetime
+
+    client_id: str | None = Field(default=None, min_length=1, max_length=64)
+    telegram_id: int | None = None
+    phone: str | None = Field(default=None, min_length=3, max_length=32)
+
+
+class BalanceOperationPayload(BaseModel):
+    """Событие «движение денег на счёте гостя в OASys» — НЕ PTS. Заменяет
+    пуллинг GET /method/admin/operations/history из oasys_live.py."""
+
+    operation_id: str = Field(..., min_length=1, max_length=64, description="ID операции в OASys, ключ идемпотентности")
+    operation_type: Literal["increase", "decrease"]
+    amount: float = Field(default=0, ge=0)
+    payment_method: str | None = Field(default=None, max_length=32)
+    created_at: datetime
+
+    client_id: str | None = Field(default=None, min_length=1, max_length=64)
+    telegram_id: int | None = None
+    phone: str | None = Field(default=None, min_length=3, max_length=32)
+
+
 class LinkPhonePayload(BaseModel):
     """Привязка телефона к Telegram — приезжает из существующего бота OASys."""
 
@@ -116,6 +161,41 @@ class TestSessionEndRequest(BaseModel):
     pc_number: int | None = Field(default=None, ge=1, le=49)
     started_at: datetime | None = None
     duration_minutes: int | None = Field(default=None, ge=0, le=MAX_SESSION_MINUTES)
+
+
+class TestBookingRequest(BaseModel):
+    """Форма «отправить тестовый вебхук» в панели — бронь. Тот же путь,
+    что у настоящего вебхука OASys, только для ручной проверки/демонстрации."""
+
+    __test__ = False
+
+    club_slug: str = Field(..., min_length=2, max_length=32)
+    telegram_id: int
+    status: Literal["created", "confirmed", "cancelled", "no_show", "completed"] = "completed"
+    pc_number: int | None = Field(default=None, ge=1, le=49)
+    price: float = Field(default=0, ge=0)
+    booking_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+
+class TestPurchaseRequest(BaseModel):
+    __test__ = False
+
+    club_slug: str = Field(..., min_length=2, max_length=32)
+    telegram_id: int
+    sku: str = Field(..., min_length=1, max_length=64)
+    amount: float = Field(default=0, ge=0)
+    purchase_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+
+class TestBalanceOperationRequest(BaseModel):
+    __test__ = False
+
+    club_slug: str = Field(..., min_length=2, max_length=32)
+    telegram_id: int
+    operation_type: Literal["increase", "decrease"] = "increase"
+    amount: float = Field(default=0, ge=0)
+    payment_method: str = "card"
+    operation_id: str | None = Field(default=None, min_length=1, max_length=64)
 
 
 class AdminCreateRequest(BaseModel):
