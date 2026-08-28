@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>BATTLEHALL</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="/static/brand/brand.css?v=7">
+  <link rel="stylesheet" href="/styles.css?v=7">
+  <link rel="stylesheet" href="/mobile.css?v=1">
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <img class="logo" src="/static/brand/logo-full.svg" alt="BATTLEHALL">
+      <div class="balance" id="topBalance">— PTS</div>
+    </header>
+
+    <main id="screens">
+      <section class="screen" data-screen="home">
+        <div class="card group-card" id="groupCard"></div>
+        <div class="stats-row" id="statsRow"></div>
+        <div class="card daily-card" id="dailyCard"></div>
+      </section>
+
+      <section class="screen" data-screen="achievements" hidden>
+        <div class="segmented" id="achTabs">
+          <button class="seg active" data-cat="weekly">Еженедельные</button>
+          <button class="seg" data-cat="monthly">Ежемесячные</button>
+          <button class="seg" data-cat="special">Особые</button>
+        </div>
+        <div id="achList" class="list"></div>
+      </section>
+
+      <section class="screen" data-screen="rewards" hidden>
+        <div id="activeCode"></div>
+        <div id="rewardList" class="list"></div>
+      </section>
+
+      <section class="screen" data-screen="loot" hidden>
+        <div id="lootList"></div>
+      </section>
+
+      <section class="screen" data-screen="profile" hidden>
+        <div class="card" id="referralCard"></div>
+        <div class="accordion">
+          <button class="acc-head" data-acc="visits">История посещений</button>
+          <div class="acc-body" data-acc-body="visits" hidden></div>
+        </div>
+        <div class="accordion">
+          <button class="acc-head" data-acc="pts">История PTS</button>
+          <div class="acc-body" data-acc-body="pts" hidden></div>
+        </div>
+        <div class="accordion">
+          <button class="acc-head" data-acc="rules">Правила программы</button>
+          <div class="acc-body" data-acc-body="rules" hidden></div>
+        </div>
+        <div class="accordion">
+          <button class="acc-head" data-acc="faq">FAQ</button>
+          <div class="acc-body" data-acc-body="faq" hidden></div>
+        </div>
+      </section>
+    </main>
+
+    <nav class="tabbar">
+      <button class="tab active" data-tab="home"><span class="ico">◆</span>Главная</button>
+      <button class="tab" data-tab="achievements"><span class="ico">★</span>Достижения</button>
+      <button class="tab" data-tab="rewards"><span class="ico">◈</span>Награды</button>
+      <button class="tab" data-tab="loot"><span class="ico">▤</span>ЛУДЛЕНТА</button>
+      <button class="tab" data-tab="profile"><span class="ico">●</span>Профиль</button>
+    </nav>
+  </div>
+
+  <div id="allinConfirmOverlay" class="spin-overlay allin-confirm" hidden>
+    <div class="spin-box allin-confirm-box">
+      <div class="allin-confirm-title">ALL IN</div>
+      <div class="allin-confirm-message" id="allinConfirmMessage"></div>
+      <div class="allin-confirm-actions">
+        <button class="btn ghost" id="allinCancelBtn">Отмена</button>
+        <button class="btn allin" id="allinConfirmBtn">Ставлю всё</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="spinOverlay" class="spin-overlay" hidden>
+    <div class="spin-box">
+      <div class="spin-title-row">
+        <div class="spin-title" id="spinTitle"></div>
+        <button class="btn ghost small" id="spinSkipBtn" hidden>Пропустить →</button>
+      </div>
+      <div class="reels-grid" id="reelsGrid"></div>
+      <div class="win-flash" id="winFlash"></div>
+      <div class="spin-result" id="spinResult" hidden></div>
+      <button class="btn ghost block" id="spinClose" hidden>Закрыть</button>
+    </div>
+  </div>
+
+  <div id="coinRain" class="coin-rain"></div>
+
+  <div id="wastedOverlay" class="wasted-overlay" hidden>
+    <div class="wasted-text">WASTED</div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="/app.js?v=8"></script>
+  <script src="/spin-guard.js?v=2"></script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Environment & Secrets
+.env
+.env.local
+secrets/*.json
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+*.sqlite3
+server.log
+
+# IDE
+.idea/
+.vscode/
+
+# Reports & scratch
+.reports/
+scratch/
+
